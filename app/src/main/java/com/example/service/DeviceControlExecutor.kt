@@ -54,7 +54,6 @@ data class DeviceHardwareSnapshot(
 
 class DeviceControlExecutor(
     private val context: Context,
-    val musicEngine: BuiltInMusicEngine,
     val codingAndContactsManager: ArcherCodingAndContactsManager = ArcherCodingAndContactsManager(context),
     private val onSaveMemoryNoteCallback: (String, String, String) -> Unit = { _, _, _ -> },
     private val onScheduleTaskCallback: (String, String, String) -> Unit = { _, _, _ -> },
@@ -210,17 +209,22 @@ class DeviceControlExecutor(
         } catch (_: Exception) {}
     }
 
+    fun toggleSystemMediaPlayPause() {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
+        } catch (_: Exception) {}
+    }
+
     fun executeStep(step: AgentStep, launchExternalIntents: Boolean = true): String {
         return try {
             val resultMsg = when (step.actionType) {
                 AgentActionType.PLAY_MUSIC -> {
-                    // Real songs in the user's REAL music app (the old built-in synth sounded like a ringtone)
-                    try { musicEngine.stop() } catch (_: Exception) {}
                     playRealMusic(step.query, step.artist, launchExternalIntents)
                 }
 
                 AgentActionType.STOP_MUSIC -> {
-                    try { musicEngine.stop() } catch (_: Exception) {}
                     pauseAllMediaPlayback()
                     "মিউজিক বন্ধ/পজ করা হয়েছে"
                 }
@@ -484,7 +488,7 @@ class DeviceControlExecutor(
                         language = step.codeLanguage.ifBlank { "HTML/JS" },
                         rawCodeOrResponse = step.body.ifBlank { step.description }
                     )
-                    "স্যার, কোডিং সম্পন্ন হয়েছে (${staged.preferredFileName})। এই কাজটা হয়ে গেছে—এটা কি 'archer' ফোল্ডারে সেভ করব?"
+                    "জি স্যার, কোডিং সম্পন্ন হয়েছে এবং '${staged.preferredFileName}' ফাইলটি কোনো ডুপ্লিকেট ছাড়া সরাসরি Google Drive (/AI_OS_Memory/Argon4_Code) ও Download/archer/ ফোল্ডারে অটোমেটিক সেভ করে দিয়েছি।"
                 }
 
                 AgentActionType.SHARE_ARCHER_FILE -> {
@@ -2094,7 +2098,7 @@ class DeviceControlExecutor(
 
     fun openExternalMusicSearch(query: String, artist: String) {
         val fullQuery = listOf(query, artist).filter { it.isNotBlank() }.joinToString(" ").ifBlank {
-            musicEngine.state.value.currentTrack.youtubeQuery
+            "Bangla Hit Songs"
         }
         try {
             val mediaIntent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {

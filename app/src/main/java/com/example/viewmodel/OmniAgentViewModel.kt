@@ -15,20 +15,17 @@ import com.example.model.AgentActionType
 import com.example.model.AgentPlanResponse
 import com.example.model.AgentStep
 import com.example.model.CuratedTrack
-import com.example.model.HeadlineItem
 import com.example.model.JarvisNodeModal
 import com.example.model.MusicMood
 import com.example.model.SmartRoutine
 import com.example.model.WakeWordPhase
 import com.example.service.AccessibilityAutomationBus
 import com.example.service.AccessibilityEngineState
-import com.example.service.BuiltInMusicEngine
 import com.example.service.CubeSentinelBus
 import com.example.service.CubeSentinelState
 import com.example.service.CubeWakeWordService
 import com.example.service.DeviceControlExecutor
 import com.example.service.DeviceHardwareSnapshot
-import com.example.service.MusicPlayerState
 import com.example.service.NotificationHubState
 import com.example.service.NotificationReplyBus
 import com.example.service.VoiceAgentBridge
@@ -99,11 +96,9 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         )
     }
 
-    val musicEngine = BuiltInMusicEngine()
     val codingAndContactsManager = com.example.service.ArcherCodingAndContactsManager(application.applicationContext)
     val deviceExecutor = DeviceControlExecutor(
         context = application.applicationContext,
-        musicEngine = musicEngine,
         codingAndContactsManager = codingAndContactsManager,
         onSaveMemoryNoteCallback = { title, content, category ->
             viewModelScope.launch {
@@ -249,7 +244,15 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             val sb = StringBuilder()
             val stepLabels = mutableListOf<String>()
             var startedInstallWatch = false
-            plan.steps.forEachIndexed { index, step ->
+            for ((index, step) in plan.steps.withIndex()) {
+                val securityBlock = com.example.service.VoiceBiometricsEngine.verifySensitiveActionOrReturnBlockMessageBn(
+                    actionOrToolName = step.actionType.name,
+                    targetOrAppSummary = "${step.appName} ${step.recipient} ${step.query} ${step.title}"
+                )
+                if (securityBlock != null) {
+                    _liveArcherReply.value = securityBlock
+                    return@withContext securityBlock
+                }
                 val r = deviceExecutor.executeStep(step, launchExternalIntents = index == 0)
                 sb.append(r).append("; ")
                 stepLabels.add("${step.actionType.name}: ${step.title} -> $r")
@@ -301,6 +304,14 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                 val appName = args.optString("app_name").ifBlank {
                     args.optString("target").ifBlank { args.optString("query") }
                 }.trim()
+                val securityBlock = com.example.service.VoiceBiometricsEngine.verifySensitiveActionOrReturnBlockMessageBn(
+                    actionOrToolName = "INSTALL_APP",
+                    targetOrAppSummary = appName
+                )
+                if (securityBlock != null) {
+                    _liveArcherReply.value = securityBlock
+                    return securityBlock
+                }
                 val modeStr = args.optString("mode").uppercase().trim()
                 val isUpdate = modeStr.contains("UPDATE") || appName.lowercase().contains("update") || appName.contains("আপডেট")
                 if (appName.isBlank()) return "missing app_name"
@@ -413,11 +424,11 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             }
             "write_code" -> {
                 val title = args.optString("title").ifBlank { "archer_project" }
-                val file = args.optString("file_name").ifBlank { "main.txt" }
+                val file = args.optString("file_name").ifBlank { "index.html" }
                 val lang = args.optString("language")
                 val code = args.optString("code")
                 if (code.isBlank()) return "no code received"
-                markAssignedTaskStarted("কোড তৈরি: $file", windowMs = 30_000L)
+                markAssignedTaskStarted("কোড তৈরি ও লাইভ প্রিভিউ: $file", windowMs = 30_000L)
                 val staged = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     codingAndContactsManager.stageGeneratedCodePendingSave(
                         projectTitle = title,
@@ -426,12 +437,77 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                         rawCodeOrResponse = code
                     )
                 }
-                val askMsg = "জি স্যার, কোড তৈরি হয়ে গেছে (${staged.preferredFileName})। এই কাজটা হয়ে গেছে—এটা কি 'archer' ফোল্ডারে সেভ করব?"
-                _liveArcherReply.value = askMsg
-                "STAGED_PENDING_USER_CONFIRMATION: Code for '${staged.preferredFileName}' is ready on the Argon 4 screen (NOT saved to folder yet). Ask Sir now: 'স্যার, এই কাজটা হয়ে গেছে—এটা কি ফোল্ডারে সেভ করব?'"
+                val doneMsg = "জি স্যার, '${staged.preferredFileName}' তৈরি করে আপনার সামনে লাইভ প্রিভিউ ওপেন করেছি। আগে চেক করে দেখুন সব ঠিক আছে কি না—আপনি বললেই আমি গুগল ড্রাইভে সেভ করে দেবো।"
+                _liveArcherReply.value = doneMsg
+                "STAGED_IN_LIVE_PREVIEW_WAITING_USER_CHECK: '${staged.preferredFileName}' is now open on screen in Live Preview. Ask Sir in 1 sentence to check if everything looks right, and once he confirms ('হ্যাঁ' / 'ঠিক আছে' / 'সেভ করো'), call confirm_pending_save(decision='SAVE') to save 1 single copy to Google Drive."
+            }
+            "google_drive_cloud_os" -> {
+                val op = args.optString("operation", "BUILD_LARGE_ZIP").uppercase().trim()
+                val name = args.optString("name").ifBlank { "Archer_AI_Package" }.trim()
+                val sizeMb = args.optString("size_mb").filter { it.isDigit() }.toIntOrNull()?.coerceIn(1, 60) ?: 5
+                val contentOrSpec = args.optString("content_or_spec").trim()
+                val subFolder = args.optString("sub_folder").trim()
+                markAssignedTaskStarted("Google Drive অটো-স্টোরেজ: $name", windowMs = 60_000L)
+                val res = when (op) {
+                    "CONFIRM_SAVE_ZIP" -> {
+                        com.example.service.GoogleDriveMemorySyncService.confirmSavePendingStagedZipToDrive(ctx)
+                    }
+                    "CREATE_FOLDER" -> {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.example.service.GoogleDriveMemorySyncService.buildAndUploadLargeZipOrFolderToDrive(
+                                context = ctx,
+                                projectOrFolderName = name,
+                                targetSizeMb = 1,
+                                primaryCodeOrSpecification = contentOrSpec,
+                                customSubFolderName = name,
+                                createUnpackedFolderInDriveToo = true,
+                                requireUserReviewBeforeDriveSave = true
+                            )
+                        }
+                    }
+                    "SAVE_SINGLE_FILE" -> {
+                        val fileName = if (name.contains(".")) name else "$name.txt"
+                        val bytes = contentOrSpec.ifBlank { "Archer AI Cloud OS File: $fileName" }.toByteArray(Charsets.UTF_8)
+                        com.example.service.GoogleDriveMemorySyncService.backupGeneratedFileToDrive(
+                            context = ctx,
+                            fileName = fileName,
+                            contentBytes = bytes,
+                            summaryDescription = "AI Direct Saved File ($fileName)",
+                            targetSubFolder = subFolder
+                        )
+                        "জি স্যার, '$fileName' ফাইলটি ডুপ্লিকেট ছাড়া শুধুমাত্র ১টি কপি হিসেবে সরাসরি আপনার Google Drive (/AI_OS_Memory)-এ সেভ করে দিয়েছি।"
+                    }
+                    "SYNC_ALL" -> {
+                        com.example.service.GoogleDriveMemorySyncService.syncAllAppDataToDriveNow(ctx, speakResult = false)
+                    }
+                    "SEARCH_DRIVE" -> {
+                        com.example.service.GoogleDriveMemorySyncService.searchGoogleDriveMemory(ctx, name)
+                    }
+                    else -> {
+                        com.example.service.GoogleDriveMemorySyncService.buildAndUploadLargeZipOrFolderToDrive(
+                            context = ctx,
+                            projectOrFolderName = name,
+                            targetSizeMb = sizeMb,
+                            primaryCodeOrSpecification = contentOrSpec,
+                            customSubFolderName = subFolder.ifBlank { com.example.service.GoogleDriveMemorySyncService.SUBFOLDER_ZIPS },
+                            createUnpackedFolderInDriveToo = true,
+                            requireUserReviewBeforeDriveSave = true
+                        )
+                    }
+                }
+                _liveArcherReply.value = res
+                res
             }
             "send_generated_file" -> {
                 val recipient = args.optString("recipient").trim()
+                val securityBlock = com.example.service.VoiceBiometricsEngine.verifySensitiveActionOrReturnBlockMessageBn(
+                    actionOrToolName = "SEND_GENERATED_FILE",
+                    targetOrAppSummary = recipient
+                )
+                if (securityBlock != null) {
+                    _liveArcherReply.value = securityBlock
+                    return securityBlock
+                }
                 val platform = args.optString("platform").trim().ifBlank { "WHATSAPP" }
                 val fileName = args.optString("file_name").trim()
                 val sendAsZip = args.optString("send_as_zip").trim().equals("true", ignoreCase = true) ||
@@ -520,16 +596,21 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                 _liveArcherReply.value = res
                 res
             }
-            "bioscience_skill" -> {
-                val query = args.optString("query").trim()
-                val domain = args.optString("domain", "ALL").uppercase().trim()
-                val res = com.example.service.AgentAbilitySwitchesBus.runBioscienceSkill(
+            "cloud_bot_engine" -> {
+                val name = args.optString("name").trim().ifBlank { "Cloud Bot" }
+                val botType = args.optString("bot_type", "WEB_PRICE_SITE_MONITOR").trim()
+                val targetUrlOrApp = args.optString("target_url_or_app").trim()
+                val instruction = args.optString("instruction").trim()
+                val intervalMin = args.optString("interval_minutes").filter { it.isDigit() }.toIntOrNull() ?: 30
+                val res = com.example.service.CloudBotEngineBus.createAndRunCloudBot(
                     context = ctx,
-                    apiKey = multimodalLiveService.currentApiKey().ifBlank { _geminiApiKeyState.value },
-                    query = query,
-                    domain = domain
+                    name = name,
+                    botTypeRaw = botType,
+                    targetUrlOrApp = targetUrlOrApp,
+                    instructionPrompt = instruction,
+                    intervalMinutes = intervalMin
                 )
-                _liveArcherReply.value = res.take(320)
+                _liveArcherReply.value = res
                 res
             }
             "generate_music_lyria" -> {
@@ -634,6 +715,14 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                 val recipientOrQuery = args.optString("recipient_or_query").trim()
                 val textToType = args.optString("text_to_type").trim()
                 val targetButton = args.optString("target_button_label").trim().ifBlank { "Send" }
+                val securityBlock = com.example.service.VoiceBiometricsEngine.verifySensitiveActionOrReturnBlockMessageBn(
+                    actionOrToolName = "PREPARE_AND_HIGHLIGHT",
+                    targetOrAppSummary = "$appOrDeepLink $recipientOrQuery $targetButton"
+                )
+                if (securityBlock != null) {
+                    _liveArcherReply.value = securityBlock
+                    return securityBlock
+                }
                 markAssignedTaskStarted("টার্গেট লক: $targetButton", windowMs = 60_000L)
                 val res = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     deviceExecutor.prepareAndHighlightWithHybridEngine(
@@ -648,8 +737,74 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             }
             "execute_confirmed_click" -> {
                 val decision = args.optString("decision", "APPROVE").trim().uppercase()
+                if (decision == "APPROVE") {
+                    val securityBlock = com.example.service.VoiceBiometricsEngine.verifySensitiveActionOrReturnBlockMessageBn(
+                        actionOrToolName = "EXECUTE_CONFIRMED_CLICK",
+                        targetOrAppSummary = "Confirm Action"
+                    )
+                    if (securityBlock != null) {
+                        _liveArcherReply.value = securityBlock
+                        return securityBlock
+                    }
+                }
                 val res = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     deviceExecutor.executeConfirmedClickOrOtp(decision)
+                }
+                _liveArcherReply.value = res
+                res
+            }
+            "voice_biometrics_control" -> {
+                val op = args.optString("operation", "WHO_IS_SPEAKING").trim().uppercase()
+                val speakerName = args.optString("speaker_name").trim()
+                val genderHint = args.optString("gender_hint").trim()
+                val lockEnabledStr = args.optString("lock_enabled").trim().uppercase()
+                val res = when (op) {
+                    "ENROLL_BOSS_VOICE" -> {
+                        val parsedGender = com.example.service.DetectedSpeakerGender.fromString(genderHint)
+                            .takeIf { it != com.example.service.DetectedSpeakerGender.UNKNOWN }
+                        val msg = com.example.service.VoiceBiometricsEngine.enrollSpeakerFromRecentVoiceBuffer(
+                            context = ctx,
+                            speakerName = speakerName.ifBlank { "বস" },
+                            isOwnerBoss = true,
+                            genderOverride = parsedGender
+                        )
+                        multimodalLiveService.refreshExportConfig(_geminiApiKeyState.value)
+                        msg
+                    }
+                    "ENROLL_GUEST_VOICE", "ENROLL_VOICE" -> {
+                        val isBoss = speakerName.equals("বস", ignoreCase = true) ||
+                            speakerName.equals("Boss", ignoreCase = true) ||
+                            speakerName.isBlank()
+                        val parsedGender = com.example.service.DetectedSpeakerGender.fromString(genderHint)
+                            .takeIf { it != com.example.service.DetectedSpeakerGender.UNKNOWN }
+                        val msg = com.example.service.VoiceBiometricsEngine.enrollSpeakerFromRecentVoiceBuffer(
+                            context = ctx,
+                            speakerName = speakerName.ifBlank { "বস" },
+                            isOwnerBoss = isBoss,
+                            genderOverride = parsedGender
+                        )
+                        multimodalLiveService.refreshExportConfig(_geminiApiKeyState.value)
+                        msg
+                    }
+                    "UPDATE_GENDER_PERCEPTION" -> {
+                        com.example.service.VoiceBiometricsEngine.updateFromGeminiLivePerception(
+                            genderOrAgeHint = genderHint,
+                            speakerNameHint = speakerName
+                        )
+                        val st = com.example.service.VoiceBiometricsEngine.state.value
+                        "Updated live speaker perception: ${st.liveHudBadgeText}"
+                    }
+                    "SET_VOICE_LOCK" -> {
+                        val on = lockEnabledStr !in setOf("OFF", "FALSE", "0", "DISABLE")
+                        com.example.service.VoiceBiometricsEngine.setVoiceSecurityLockEnabled(ctx, on)
+                    }
+                    "DELETE_VOICE_PROFILE" -> {
+                        com.example.service.VoiceBiometricsEngine.deleteVoiceProfile(ctx, speakerName)
+                    }
+                    else -> {
+                        val st = com.example.service.VoiceBiometricsEngine.state.value
+                        "বর্তমান বক্তা: ${st.activeSpeakerName} • লিঙ্গ/কণ্ঠ: ${st.detectedGender.labelBn} (${st.detectedGender.labelEn}) • পিচ: ${st.currentPitchHz}Hz • বসের ভয়েস ভেরিফায়েড: ${if (st.isOwnerBossVerified) "হ্যাঁ (Verified)" else "না (Guest)"}"
+                    }
                 }
                 _liveArcherReply.value = res
                 res
@@ -677,11 +832,27 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     }
                     "PASTE_CONFIRMED_OTP" -> {
+                        val securityBlock = com.example.service.VoiceBiometricsEngine.verifySensitiveActionOrReturnBlockMessageBn(
+                            actionOrToolName = "PASTE_CONFIRMED_OTP",
+                            targetOrAppSummary = "OTP Paste"
+                        )
+                        if (securityBlock != null) {
+                            _liveArcherReply.value = securityBlock
+                            return securityBlock
+                        }
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                             deviceExecutor.executeConfirmedClickOrOtp("APPROVE")
                         }
                     }
                     "INLINE_REPLY" -> {
+                        val securityBlock = com.example.service.VoiceBiometricsEngine.verifySensitiveActionOrReturnBlockMessageBn(
+                            actionOrToolName = "INLINE_REPLY",
+                            targetOrAppSummary = "$appFilter: $replyText"
+                        )
+                        if (securityBlock != null) {
+                            _liveArcherReply.value = securityBlock
+                            return securityBlock
+                        }
                         val (_, msg) = com.example.service.NotificationReplyBus.sendInlineReply(ctx, appFilter, replyText)
                         _liveArcherReply.value = msg
                         msg
@@ -754,22 +925,20 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         val ctx = getApplication<Application>().applicationContext
         val savedItems = mutableListOf<String>()
         if (shouldSave) {
+            if (com.example.service.GoogleDriveMemorySyncService.hasPendingStagedZip()) {
+                viewModelScope.launch {
+                    val zipMsg = com.example.service.GoogleDriveMemorySyncService.confirmSavePendingStagedZipToDrive(ctx)
+                    _liveArcherReply.value = zipMsg
+                }
+                savedItems.add("জি স্যার, আপনার চেক করা ZIP প্যাকেজটি কোনো ডুপ্লিকেট ছাড়া শুধুমাত্র ১টি কপি হিসেবে সরাসরি আপনার Google Drive (/AI_OS_Memory/ZIP_Packages)-এ সেভ করে দিচ্ছি।")
+            }
             if (com.example.service.AgentAbilitySwitchesBus.hasPendingUnsavedImage()) {
                 savedItems.add(com.example.service.AgentAbilitySwitchesBus.confirmSavePendingImageToArcherFolder(ctx))
             }
             if (codingAndContactsManager.hasPendingCodeConfirmation()) {
                 val artifact = codingAndContactsManager.confirmSavePendingCodeToArcherFolder()
                 if (artifact != null) {
-                    viewModelScope.launch {
-                        com.example.service.GoogleDriveMemorySyncService.backupGeneratedFileToDrive(
-                            context = ctx,
-                            fileName = artifact.primaryFileName,
-                            mimeType = "text/plain",
-                            contentBytes = artifact.codeContent.toByteArray(Charsets.UTF_8),
-                            summaryDescription = "Generated Code Project (${artifact.language})"
-                        )
-                    }
-                    savedItems.add("জি স্যার, আপনার কথামতো কোড প্রজেক্ট '${artifact.primaryFileName}' 5TB Google Drive ('AI_OS_Memory') ও ওয়ার্কস্পেসে সেভ করে দিয়েছি।")
+                    savedItems.add("জি স্যার, আপনার চেক করা '${artifact.primaryFileName}' ফাইলটি সরাসরি 5TB Google Drive (/AI_OS_Memory/Argon4_Code) এবং Download/archer/-এ সেভ করে দিয়েছি।")
                 }
             }
             if (com.example.service.AgentAbilitySwitchesBus.hasPendingUnsavedMusic()) {
@@ -791,6 +960,10 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             }
         } else {
             var discardedAny = false
+            if (com.example.service.GoogleDriveMemorySyncService.hasPendingStagedZip()) {
+                com.example.service.GoogleDriveMemorySyncService.discardPendingStagedZip()
+                discardedAny = true
+            }
             if (com.example.service.AgentAbilitySwitchesBus.hasPendingUnsavedImage()) {
                 com.example.service.AgentAbilitySwitchesBus.discardPendingImage()
                 discardedAny = true
@@ -826,9 +999,6 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _activeModal = MutableStateFlow(JarvisNodeModal.NONE)
     val activeModal: StateFlow<JarvisNodeModal> = _activeModal.asStateFlow()
-
-    private val _selectedHeadline = MutableStateFlow<HeadlineItem?>(null)
-    val selectedHeadline: StateFlow<HeadlineItem?> = _selectedHeadline.asStateFlow()
 
     private val _isFrontCameraSelected = MutableStateFlow(true)
     val isFrontCameraSelected: StateFlow<Boolean> = _isFrontCameraSelected.asStateFlow()
@@ -883,7 +1053,6 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     private val _agentPlans = MutableStateFlow<List<AgentPlanResponse>>(defaultWelcomePlan())
     val agentPlans: StateFlow<List<AgentPlanResponse>> = _agentPlans.asStateFlow()
 
-    val musicState: StateFlow<MusicPlayerState> = musicEngine.state
     val hardwareState: StateFlow<DeviceHardwareSnapshot> = deviceExecutor.hardwareState
     val voiceState: StateFlow<VoiceBridgeState> = voiceBridge.state
     val sentinelState: StateFlow<CubeSentinelState> = CubeSentinelBus.state
@@ -922,8 +1091,6 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         initialValue = emptyList()
     )
 
-    val headlines: List<HeadlineItem> = DEFAULT_HEADLINES
-
     private val _isAgentPoweredOff = MutableStateFlow(false)
     val isAgentPoweredOff: StateFlow<Boolean> = _isAgentPoweredOff.asStateFlow()
 
@@ -941,6 +1108,7 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             onMainGlobeTap()
         }
         com.example.service.GoogleDriveMemorySyncService.init(ctx)
+        com.example.service.VoiceBiometricsEngine.init(ctx)
         com.example.service.ExternalMicArbiter.init(ctx)
         com.example.service.ExternalMicArbiter.setGeminiLiveOwningMic(true)
         com.example.service.AppTaskRemovedShutdownBus.registerViewModelShutdown {
@@ -956,6 +1124,7 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         // Continuously sync saved Room SQLite Memory Notes + Conversation Summaries into SmartMemoryAndSelfUpdateEngine
+        // AND automatically sync new changes to 5TB Google Drive (/AI_OS_Memory sub-folders) with zero clicks
         viewModelScope.launch {
             historyRepo.memoryNotesFlow.collect { notes ->
                 val historyBlock = runCatching { historyRepo.buildStartupMemoryInjectionBlock() }.getOrDefault("")
@@ -963,6 +1132,19 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                     (if (historyBlock.isNotBlank()) listOf(historyBlock) else emptyList())
                 com.example.service.SmartMemoryAndSelfUpdateEngine.syncLiveMemoryNotesSummary(lines)
                 multimodalLiveService.refreshExportConfig(_geminiApiKeyState.value)
+                if (notes.isNotEmpty()) {
+                    kotlinx.coroutines.delay(800L)
+                    com.example.service.GoogleDriveMemorySyncService.syncAllAppDataToDriveNow(ctx, speakResult = false)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            historyRepo.todayTasksFlow.collect { tasks ->
+                if (tasks.isNotEmpty()) {
+                    kotlinx.coroutines.delay(1200L)
+                    com.example.service.GoogleDriveMemorySyncService.syncAllAppDataToDriveNow(ctx, speakResult = false)
+                }
             }
         }
 
@@ -1091,7 +1273,6 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         activeWatcherJobs.values.forEach { it.cancel() }
         activeWatcherJobs.clear()
         AccessibilityAutomationBus.cancelAllPendingMacros()
-        musicEngine.stop()
         voiceBridge.stopSpeaking()
         voiceBridge.stopListening(keepSentinelPhase = false)
         multimodalLiveService.stopLiveSession(
@@ -1121,7 +1302,6 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         activeWatcherJobs.clear()
         AccessibilityAutomationBus.cancelAllPendingMacros()
         com.example.service.FloatingAvatarOverlayBus.setAppSessionAlive(false)
-        musicEngine.stop()
         voiceBridge.setHandsFreeContinuousMode(false)
         voiceBridge.stopSpeaking()
         voiceBridge.stopListening(keepSentinelPhase = false)
@@ -2013,12 +2193,6 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         _activeModal.value = JarvisNodeModal.NONE
     }
 
-    fun openHeadlineDetail(headline: HeadlineItem) {
-        _selectedHeadline.value = headline
-        _activeModal.value = JarvisNodeModal.HEADLINE_DETAIL
-        _liveArcherReply.value = "${headline.title} — ${headline.summaryBn}"
-    }
-
     fun toggleCameraLens() {
         _isFrontCameraSelected.value = !_isFrontCameraSelected.value
     }
@@ -2026,9 +2200,8 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     fun stopAllAgentActivity() {
         activeCommandJob?.cancel()
         val live = multimodalLiveState.value
-        if (live.isAgentSpeakingLive || musicState.value.isPlaying) {
+        if (live.isAgentSpeakingLive) {
             multimodalLiveService.triggerBargeInInterrupt()
-            musicEngine.stop()
             _liveArcherReply.value = "শুনছি… সরাসরি কথা বলুন।"
         } else {
             toggleLiveMicMute()
@@ -2480,12 +2653,17 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         if (hasAnyPendingSave) {
             val confirmsSave = lowerEffective == "হ্যাঁ" ||
                 lowerEffective == "জি" ||
+                lowerEffective == "ঠিক আছে" ||
+                lowerEffective.contains("সব ঠিক আছে") ||
+                lowerEffective.contains("হ্যাঁ ঠিক আছে") ||
                 lowerEffective == "সেভ করো" ||
                 lowerEffective == "সেভ কর" ||
                 lowerEffective == "হ্যাঁ সেভ করো" ||
                 lowerEffective == "হ্যাঁ সেভ কর" ||
                 lowerEffective.contains("হ্যাঁ সেভ") ||
                 lowerEffective.contains("ফোল্ডারে সেভ কর") ||
+                lowerEffective.contains("ড্রাইভে সেভ") ||
+                lowerEffective.contains("গুগল ড্রাইভে সেভ") ||
                 lowerEffective.contains("সেভ করে দাও") ||
                 lowerEffective.contains("সেইভ কর") ||
                 lowerEffective.contains("yes save") ||
@@ -2539,6 +2717,43 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             }
             _liveArcherReply.value = report
             voiceBridge.speak(report)
+            return
+        }
+
+        // 2b. Check if the user is asking to build a large folder or multi-MB ZIP or sync directly to Google Drive
+        val mentionsZipOrLargeFolder = (lowerEffective.contains("zip") ||
+            lowerEffective.contains("জিপ") ||
+            lowerEffective.contains("জিফ") ||
+            lowerEffective.contains("বড় ফোল্ডার") ||
+            lowerEffective.contains("বড় ফোল্ডার") ||
+            lowerEffective.contains("এমবি") ||
+            lowerEffective.contains("mb")) &&
+            (lowerEffective.contains("তৈরি") ||
+                lowerEffective.contains("বান") ||
+                lowerEffective.contains("ড্রাইভ") ||
+                lowerEffective.contains("drive") ||
+                lowerEffective.contains("সেভ") ||
+                lowerEffective.contains("সেইভ"))
+
+        if (mentionsZipOrLargeFolder) {
+            val ctx = getApplication<Application>().applicationContext
+            val requestedMb = Regex("(\\d+)\\s*(?:mb|এমবি)", RegexOption.IGNORE_CASE)
+                .find(rawTrimmed)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+                ?.coerceIn(1, 60) ?: 5
+            viewModelScope.launch {
+                val res = com.example.service.GoogleDriveMemorySyncService.buildAndUploadLargeZipOrFolderToDrive(
+                    context = ctx,
+                    projectOrFolderName = "Archer_AI_${requestedMb}MB_Package",
+                    targetSizeMb = requestedMb,
+                    primaryCodeOrSpecification = rawTrimmed,
+                    createUnpackedFolderInDriveToo = true
+                )
+                _liveArcherReply.value = res
+                voiceBridge.speak(res)
+            }
             return
         }
 
@@ -4142,13 +4357,11 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun playCuratedTrack(track: CuratedTrack) {
-        musicEngine.playTrack(track)
+        deviceExecutor.openExternalMusicSearch(track.title, track.artist)
     }
 
     fun playMoodImmediately(mood: MusicMood) {
-        val firstForMood = BuiltInMusicEngine.CURATED_TRACKS.firstOrNull { it.mood == mood }
-            ?: BuiltInMusicEngine.CURATED_TRACKS.first()
-        musicEngine.playTrack(firstForMood)
+        deviceExecutor.openExternalMusicSearch(mood.titleEn, "")
     }
 
     fun openExternalMusicApp(query: String, artist: String) {
@@ -4170,50 +4383,11 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         shutdownAgentCompletelyOnTaskRemoved()
         super.onCleared()
-        musicEngine.stop()
         voiceBridge.release()
         multimodalLiveService.release()
     }
 
     companion object {
-        val DEFAULT_HEADLINES = listOf(
-            HeadlineItem(
-                id = "hl_1",
-                title = "AI News Today, October 19: T...",
-                dateLabel = "Oct 19",
-                summaryBn = "মোবাইল জার্ভিস এজেন্ট এখন ভয়েস কমান্ডের মাধ্যমে নিজে নিজে সিদ্ধান্ত নিয়ে সরাসরি প্লে স্টোর, ক্রোম, হোয়াটসঅ্যাপ ও টেলিগ্রাম নিয়ন্ত্রণ করতে সক্ষম।",
-                sourceUrl = "https://blog.google/technology/ai/"
-            ),
-            HeadlineItem(
-                id = "hl_2",
-                title = "AI News Today – Latest AI A...",
-                dateLabel = "Oct 18",
-                summaryBn = "অ্যান্ড্রয়েড অ্যাক্সেসিবিলিটি এবং নোটিফিকেশন ইঞ্জিনের সমন্বয়ে এক কথায় অ্যাপ ইনস্টল ও ফাইল ডাউনলোড এখন আরও দ্রুত।",
-                sourceUrl = "https://developer.android.com/ai"
-            ),
-            HeadlineItem(
-                id = "hl_3",
-                title = "AI News Today, October 16: T...",
-                dateLabel = "Oct 16",
-                summaryBn = "দীর্ঘমেয়াদী নিউরাল মেমোরি প্রযুক্তির কারণে এআই এজেন্ট ইউজারের সব কথা ও ওয়েবসাইটের তথ্য মনে রাখতে পারে।",
-                sourceUrl = "https://deepmind.google/"
-            ),
-            HeadlineItem(
-                id = "hl_4",
-                title = "AI News Today, October 15: T...",
-                dateLabel = "Oct 15",
-                summaryBn = "বাংলা ভয়েস কমান্ড ও ওয়েক-ওয়ার্ড প্রযুক্তির মাধ্যমে লক স্ক্রিন থেকেও সম্পূর্ণ মোবাইল পরিচালনা।",
-                sourceUrl = "https://ai.google.dev/"
-            ),
-            HeadlineItem(
-                id = "hl_5",
-                title = "AI News Today, October 14: Autonomous OS Agents",
-                dateLabel = "Oct 14",
-                summaryBn = "জেনারেটিভ এআই এখন ইউজারের সংক্ষিপ্ত নির্দেশ থেকেই মাল্টি-স্টেপ অ্যাকশন প্ল্যান তৈরি করে স্বয়ংক্রিয়ভাবে কাজ সম্পন্ন করে।",
-                sourceUrl = "https://blog.google/"
-            )
-        )
-
         val PRESET_ROUTINES = listOf(
             SmartRoutine(
                 id = "routine_playstore_install",

@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -64,11 +65,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -96,7 +100,6 @@ import com.example.data.PlatformAccountEntity
 import com.example.data.TodayTaskEntity
 import com.example.model.AgentPlanResponse
 import com.example.model.AgentStep
-import com.example.model.HeadlineItem
 import com.example.model.JarvisNodeModal
 import com.example.model.MusicMood
 import com.example.model.WakeWordPhase
@@ -108,14 +111,12 @@ import com.example.service.CubeSentinelState
 import com.example.service.DeviceHardwareSnapshot
 import com.example.service.LiveConnectionEngine
 import com.example.service.MultimodalLiveSessionState
-import com.example.service.MusicPlayerState
 import com.example.service.NotificationHubState
 import com.example.service.SavedArcherArtifact
 import com.example.service.VoiceBridgeState
 import com.example.ui.components.ChatAndUniversalCrossAppSheet
 import com.example.ui.components.CodingAndArgonWorkspaceSheet
 import com.example.ui.components.CyberCyan
-import com.example.ui.components.HeadlineDetailSheet
 import com.example.ui.components.JarvisCircuitAndGlobeStage
 import com.example.ui.components.LiveCameraAndScreenVisionSheet
 import com.example.ui.components.MatrixGreen
@@ -133,7 +134,6 @@ import com.example.viewmodel.AgentUiState
 fun AgentCommandScreen(
     uiState: AgentUiState,
     plans: List<AgentPlanResponse>,
-    musicState: MusicPlayerState,
     hardwareState: DeviceHardwareSnapshot,
     voiceState: VoiceBridgeState,
     sentinelState: CubeSentinelState,
@@ -142,9 +142,7 @@ fun AgentCommandScreen(
     memoryNotes: List<AgentMemoryNoteEntity>,
     todayTasks: List<TodayTaskEntity>,
     platformAccounts: List<PlatformAccountEntity>,
-    headlines: List<HeadlineItem>,
     activeModal: JarvisNodeModal,
-    selectedHeadline: HeadlineItem?,
     isFrontCameraSelected: Boolean,
     geminiApiKey: String,
     onSaveGeminiApiKey: (String) -> Unit,
@@ -160,7 +158,6 @@ fun AgentCommandScreen(
     onStartVoiceListening: () -> Unit,
     onStopVoiceListening: () -> Unit,
     onOpenModal: (JarvisNodeModal) -> Unit,
-    onSelectHeadline: (HeadlineItem) -> Unit,
     onToggleCameraFacing: () -> Unit,
     onLaunchSystemCamera: () -> Unit,
     onAddMemoryNote: (String, String) -> Unit,
@@ -450,6 +447,11 @@ fun AgentCommandScreen(
                     onOpenHub = { onOpenModal(JarvisNodeModal.MULTIMODAL_LIVE_API_HUB) }
                 )
 
+                // 2B-2. Real-Time Biometric Speaker Identification, Owner Voice Lock & Male/Female Gender HUD Pill
+                VoiceBiometricsHudPillBar(
+                    onSpeakStatus = onSpeakText
+                )
+
                 // 2C. 5TB Google Drive ('AI_OS_Memory') Quick Connect & Zero-Storage Status Bar
                 val driveSyncState by com.example.service.GoogleDriveMemorySyncService.state.collectAsState()
                 Row(
@@ -469,7 +471,7 @@ fun AgentCommandScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = if (driveSyncState.isConnected) {
-                                "☁️ 5TB Drive: ${driveSyncState.linkedEmail} (/${driveSyncState.driveFolderName})"
+                                "☁️ 5TB Drive: ${driveSyncState.linkedEmail} (/${driveSyncState.driveFolderName} • ৬ সাব-ফোল্ডার)"
                             } else {
                                 "☁️ 5TB Google Drive (/AI_OS_Memory) • মেইন স্টোরেজ ১০০% ফ্রি"
                             },
@@ -481,7 +483,7 @@ fun AgentCommandScreen(
                         )
                         Text(
                             text = if (driveSyncState.isConnected) {
-                                "অটো-ব্যাকআপ সচল: মেমোরি ${driveSyncState.backedUpMemoriesCount} • চ্যাট ${driveSyncState.backedUpConversationsCount} • ফাইল ${driveSyncState.backedUpScreenshotsAndFilesCount}"
+                                "জিরো-ক্লিক অটো-সিঙ্ক সচল: মেমোরি ${driveSyncState.backedUpMemoriesCount} • চ্যাট ${driveSyncState.backedUpConversationsCount} • কোড/ফাইল ${driveSyncState.backedUpScreenshotsAndFilesCount} • ZIP ${driveSyncState.backedUpZipPackagesCount}"
                             } else {
                                 "SQLite ফাস্ট স্টার্টআপ + 5TB ক্লাউড অটো-ব্যাকআপ চালু করতে Gmail যুক্ত করুন"
                             },
@@ -597,29 +599,15 @@ fun AgentCommandScreen(
                     onOpenApiKeyClick = { showQuickGeminiKeyDialog = true }
                 )
 
-                // 5. Exact Bottom Split Section: TODAY HEADLINES (Left) + TODAY TASKS (Right)
-                Row(
+                // 5. TODAY TASKS & 5TB CLOUD BOT ACTIVITY
+                ArcherTodayTasksCard(
+                    tasks = todayTasks,
+                    onToggleTask = onToggleTodayTask,
+                    onOpenTasksModal = { onOpenModal(JarvisNodeModal.CHAT_AND_MESSAGES) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    ArcherTodayHeadlinesColumn(
-                        headlines = headlines,
-                        showAll = showAllHeadlines,
-                        onToggleShowAll = { showAllHeadlines = !showAllHeadlines },
-                        onSelectHeadline = onSelectHeadline,
-                        modifier = Modifier.weight(0.95f)
-                    )
-
-                    ArcherTodayTasksCard(
-                        tasks = todayTasks,
-                        onToggleTask = onToggleTodayTask,
-                        onOpenTasksModal = { onOpenModal(JarvisNodeModal.CHAT_AND_MESSAGES) },
-                        modifier = Modifier.weight(1.05f)
-                    )
-                }
+                        .padding(top = 2.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -719,7 +707,6 @@ fun AgentCommandScreen(
             JarvisNodeModal.SOUL_AND_WAKE -> {
                 SoulAndMusicWakeSheet(
                     sentinelState = sentinelState,
-                    musicState = musicState,
                     onToggleSentinel = onToggleAlwaysOnSentinel,
                     onSimulateHeyCube = onSimulateHeyCube,
                     onSelectMood = onSelectMood,
@@ -826,21 +813,6 @@ fun AgentCommandScreen(
                     },
                     onClose = { onOpenModal(JarvisNodeModal.NONE) }
                 )
-            }
-
-            JarvisNodeModal.HEADLINE_DETAIL -> {
-                selectedHeadline?.let { item ->
-                    HeadlineDetailSheet(
-                        headline = item,
-                        onOpenInChrome = { url ->
-                            onChromeAction(url)
-                        },
-                        onAskAiAboutHeadline = { prompt ->
-                            onSendCommand(prompt)
-                        },
-                        onClose = { onOpenModal(JarvisNodeModal.NONE) }
-                    )
-                }
             }
 
             JarvisNodeModal.MULTIMODAL_LIVE_API_HUB -> {
@@ -2090,82 +2062,6 @@ private fun ArcherMessageSignalBar(
 }
 
 @Composable
-private fun ArcherTodayHeadlinesColumn(
-    headlines: List<HeadlineItem>,
-    showAll: Boolean,
-    onToggleShowAll: () -> Unit,
-    onSelectHeadline: (HeadlineItem) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val visibleItems = if (showAll) headlines else headlines.take(4)
-    val extraCount = (headlines.size - 4).coerceAtLeast(1)
-
-    Column(
-        modifier = modifier
-            .padding(top = 4.dp)
-            .testTag("today_headlines_panel"),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "TODAY HEADLINES",
-                color = Color.White,
-                fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 11.sp,
-                letterSpacing = 0.8.sp
-            )
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = CyberCyan,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-
-        visibleItems.forEach { item ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onSelectHeadline(item) },
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(2.5.dp)
-                        .height(14.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(CyberCyan)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = item.title,
-                    color = Color(0xFFEBF7F5),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        Text(
-            text = if (showAll) "SHOW LESS" else "+$extraCount MORE",
-            color = CyberCyan,
-            fontFamily = FontFamily.SansSerif,
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 10.sp,
-            letterSpacing = 0.8.sp,
-            modifier = Modifier.clickable { onToggleShowAll() }
-        )
-    }
-}
-
-@Composable
 private fun ArcherTodayTasksCard(
     tasks: List<TodayTaskEntity>,
     onToggleTask: (TodayTaskEntity) -> Unit,
@@ -2446,4 +2342,245 @@ private fun LockScreenCubeWakeOverlay(
         }
     }
 }
+
+@Composable
+private fun VoiceBiometricsHudPillBar(
+    onSpeakStatus: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val bioState by com.example.service.VoiceBiometricsEngine.state.collectAsState()
+    var showGuestEnrollDialog by remember { mutableStateOf(false) }
+    var guestNameInput by remember { mutableStateOf("") }
+
+    val borderColor = when {
+        bioState.isEnrolling -> Color(0xFFF59E0B)
+        bioState.isOwnerBossVerified && bioState.hasOwnerBossProfile -> MatrixGreen.copy(alpha = 0.78f)
+        bioState.isKnownEnrolledSpeaker -> CyberCyan.copy(alpha = 0.78f)
+        else -> Color(0xFF334155)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF0B0F19))
+            .border(1.dp, borderColor, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .testTag("hud_voice_biometrics_pill")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = bioState.liveHudBadgeText,
+                    color = when {
+                        bioState.isEnrolling -> Color(0xFFFBBF24)
+                        bioState.isOwnerBossVerified && bioState.hasOwnerBossProfile -> MatrixGreen
+                        bioState.isKnownEnrolledSpeaker -> CyberCyan
+                        else -> Color(0xFFE2E8F0)
+                    },
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = buildString {
+                        append("কণ্ঠ: ${bioState.detectedGender.labelBn} (${bioState.detectedGender.labelEn})")
+                        if (bioState.currentPitchHz > 0) {
+                            append(" • ${bioState.currentPitchHz}Hz")
+                        }
+                        append(" • প্রোফাইল: ${bioState.enrolledProfiles.size}টি (5TB Drive)")
+                        if (bioState.hasOwnerBossProfile) {
+                            append(if (bioState.isVoiceSecurityLockEnabled) " • 🔒 সিকিউরিটি লক ON" else " • 🔓 লক OFF")
+                        }
+                    },
+                    color = Color(0xFF94A3B8),
+                    fontSize = 9.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = {
+                        com.example.service.VoiceBiometricsEngine.startFiveSecondVoiceEnrollment(
+                            context = context,
+                            speakerName = "বস",
+                            isOwnerBoss = true,
+                            onComplete = { msg -> onSpeakStatus(msg) }
+                        )
+                    },
+                    enabled = !bioState.isEnrolling,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (bioState.hasOwnerBossProfile) MatrixGreen else Color(0xFF38BDF8),
+                        contentColor = Color.Black
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("enroll_boss_voice_lock_button")
+                ) {
+                    Text(
+                        text = if (bioState.isEnrolling && bioState.enrollmentIsOwnerBoss) {
+                            "⏳ ${bioState.enrollmentProgressPercent}%"
+                        } else if (bioState.hasOwnerBossProfile) {
+                            "🔒 বসের ভয়েস আপডেট"
+                        } else {
+                            "🔒 বসের ভয়েস লক (5s)"
+                        },
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { showGuestEnrollDialog = true },
+                    enabled = !bioState.isEnrolling,
+                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.7f)),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("enroll_guest_voice_button")
+                ) {
+                    Text(
+                        text = "➕ কণ্ঠ সেভ",
+                        color = Color(0xFF38BDF8),
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        if (bioState.lastSecurityGateEventBn.isNotBlank()) {
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = bioState.lastSecurityGateEventBn,
+                color = Color(0xFFF87171),
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+
+    if (showGuestEnrollDialog) {
+        AlertDialog(
+            onDismissRequest = { showGuestEnrollDialog = false },
+            containerColor = Color(0xFF1E293B),
+            title = {
+                Text(
+                    text = "🎙️ নতুন বক্তার কণ্ঠ সেভ ও ভয়েস লক",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "বন্ধু বা পরিবারের কারো নাম লিখে ৫ সেকেন্ড কথা বলতে বলুন। তার ভয়েস প্রিন্ট স্বয়ংক্রিয়ভাবে `/AI_OS_5TB_Core/Voice_Profiles/`-এ সেভ হয়ে যাবে।",
+                        color = Color(0xFFCBD5E1),
+                        fontSize = 12.sp
+                    )
+                    OutlinedTextField(
+                        value = guestNameInput,
+                        onValueChange = { guestNameInput = it },
+                        label = { Text("বক্তার নাম (যেমন: সিয়াম, রাহাত, মীম)", color = Color(0xFF94A3B8)) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("guest_voice_name_input")
+                    )
+                    if (bioState.enrolledProfiles.isNotEmpty()) {
+                        Text(
+                            text = "সেভ করা ভয়েস প্রিন্টসমূহ (${bioState.enrolledProfiles.size}):",
+                            color = Color(0xFF38BDF8),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        bioState.enrolledProfiles.forEach { prof ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "• ${prof.speakerName} (${prof.gender.labelBn}/${prof.gender.labelEn} • ${prof.meanPitchHz.toInt()}Hz)",
+                                    color = Color.White,
+                                    fontSize = 11.sp
+                                )
+                                TextButton(
+                                    onClick = {
+                                        com.example.service.VoiceBiometricsEngine.deleteVoiceProfile(context, prof.id)
+                                    }
+                                ) {
+                                    Text("মুছুন", color = Color(0xFFF87171), fontSize = 10.sp)
+                                }
+                            }
+                        }
+                    }
+                    if (bioState.hasOwnerBossProfile) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "🔒 সংবেদনশীল আদেশে বসের ভয়েস সিকিউরিটি গেট",
+                                color = Color.White,
+                                fontSize = 11.sp
+                            )
+                            Switch(
+                                checked = bioState.isVoiceSecurityLockEnabled,
+                                onCheckedChange = { enabled ->
+                                    com.example.service.VoiceBiometricsEngine.setVoiceSecurityLockEnabled(context, enabled)
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val targetName = guestNameInput.trim().ifBlank { "মেহমান" }
+                        showGuestEnrollDialog = false
+                        guestNameInput = ""
+                        com.example.service.VoiceBiometricsEngine.startFiveSecondVoiceEnrollment(
+                            context = context,
+                            speakerName = targetName,
+                            isOwnerBoss = targetName.equals("বস", ignoreCase = true) || targetName.equals("Boss", ignoreCase = true),
+                            onComplete = { msg -> onSpeakStatus(msg) }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF38BDF8),
+                        contentColor = Color.Black
+                    ),
+                    modifier = Modifier.testTag("confirm_enroll_guest_voice_button")
+                ) {
+                    Text("🎙️ ৫ সেকেন্ড কণ্ঠ রেকর্ড করুন", fontWeight = FontWeight.ExtraBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGuestEnrollDialog = false }) {
+                    Text("বন্ধ করুন", color = Color(0xFF94A3B8))
+                }
+            }
+        )
+    }
+}
+
 

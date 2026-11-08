@@ -98,6 +98,7 @@ fun LiveCodingOverlay() {
     val total = s.code.length
     var shown by remember(s.id) { mutableIntStateOf(0) }
     var voicePatchInput by rememberSaveable(s.id) { mutableStateOf("") }
+    var isFullScreenPreview by rememberSaveable(s.id) { mutableStateOf(false) }
     var selectedExtOverride by rememberSaveable(s.fileName) {
         mutableStateOf(s.fileName.substringAfterLast('.', "html").lowercase())
     }
@@ -254,6 +255,31 @@ fun LiveCodingOverlay() {
                             )
                         }
                     }
+
+                    // Full-Screen Toggle Button
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isFullScreenPreview) skyBlue.copy(alpha = 0.22f) else slateInner)
+                            .border(1.dp, if (isFullScreenPreview) skyBlue else slateBorder, RoundedCornerShape(10.dp))
+                            .clickable {
+                                isFullScreenPreview = !isFullScreenPreview
+                                if (isFullScreenPreview) {
+                                    CodingSessionBus.selectTab("PREVIEW")
+                                }
+                            }
+                            .padding(horizontal = 10.dp)
+                            .testTag("coding_btn_fullscreen_toggle")
+                    ) {
+                        Text(
+                            text = if (isFullScreenPreview) "⛶ ছোট করুন" else "⛶ ফুল-স্ক্রিন",
+                            color = skyBlue,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
         }
@@ -360,29 +386,83 @@ fun LiveCodingOverlay() {
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        // 3. User Check & Confirmation Banner + Voice-Driven Code Patching & Export Control Deck
+        if (!isFullScreenPreview) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = slateCard,
+                border = BorderStroke(1.dp, if (s.pendingSaveConfirmation && !s.isSaved) emerald else slateBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    if (s.statusMessageBn.isNotBlank()) {
+                        Text(
+                            text = s.statusMessageBn,
+                            color = if (s.isSaved || s.isSyncedToDrive) emerald else skyBlue,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
 
-        // 3. Voice-Driven Code Patching & Export Control Deck
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = slateCard,
-            border = BorderStroke(1.dp, slateBorder),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                if (s.statusMessageBn.isNotBlank()) {
-                    Text(
-                        text = s.statusMessageBn,
-                        color = if (s.isSaved || s.isSyncedToDrive) emerald else skyBlue,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
+                    // Mandatory Preview-First Check & Confirm Bar for ZIP & Code before saving to Google Drive
+                    if (s.pendingSaveConfirmation && !s.isSaved) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = emerald.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, emerald),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "👀 প্রিভিউ চেক করুন: সব ঠিক থাকলে নিচে কনফার্ম করুন অথবা মুখে বলুন 'হ্যাঁ, সেভ করো' — তাহলেই সরাসরি 5TB Google Drive-এ সেভ হবে:",
+                                    color = textPrimary,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = 15.sp
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    PremiumActionButton(
+                                        text = "✔ সব ঠিক আছে — 5TB Drive-এ সেভ করুন",
+                                        icon = Icons.Default.CloudUpload,
+                                        primaryColor = emerald,
+                                        onClick = {
+                                            CodingSessionBus.requestConfirmSave(selectedExtOverride)
+                                            Toast.makeText(
+                                                context,
+                                                "✔ আপনার কনফার্মেশন অনুযায়ী Google Drive ও Download/archer/-এ সেভ হচ্ছে...",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        testTag = "btn_confirm_preview_save_to_drive"
+                                    )
+                                    PremiumActionButton(
+                                        text = "✖ বাদ দিন",
+                                        icon = Icons.Default.Close,
+                                        primaryColor = Color(0xFFEF4444),
+                                        isOutlined = true,
+                                        onClick = {
+                                            CodingSessionBus.requestDiscard()
+                                        },
+                                        testTag = "btn_discard_preview_package"
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
 
-                // Voice-Driven Code Patching Input Row
+                    // Voice-Driven Code Patching Input Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -533,6 +613,7 @@ fun LiveCodingOverlay() {
                     )
                 }
             }
+        }
         }
     }
 }

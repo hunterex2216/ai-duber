@@ -124,11 +124,16 @@ class ArcherCodingAndContactsManager(private val context: Context) {
     }
 
     fun hasPendingCodeConfirmation(): Boolean =
-        pendingStagedCode != null || CodingSessionBus.hasPendingUnsavedCode()
+        pendingStagedCode != null ||
+            CodingSessionBus.hasPendingUnsavedCode() ||
+            GoogleDriveMemorySyncService.hasPendingStagedZip()
 
     /**
-     * Stages generated code or text in memory and opens the Dedicated Coding Studio Page WITHOUT writing
-     * duplicate files or auto-saving until the user confirms.
+     * Stages generated code or text in memory and opens the Dedicated Coding Studio Page immediately:
+     * - Automatically sets `activeTab = "PREVIEW"` whenever the generated code is HTML/CSS/JS or a web app/site
+     *   so the live rendered website opens immediately on screen without manual tab switching!
+     * - Keeps `pendingSaveConfirmation = true` so the user can inspect the preview first before saving a single
+     *   clean copy to Google Drive (`/AI_OS_Memory/Argon4_Code`) and `Download/archer/`.
      */
     fun stageGeneratedCodePendingSave(
         projectTitle: String,
@@ -138,42 +143,49 @@ class ArcherCodingAndContactsManager(private val context: Context) {
     ): PendingCodeStageRequest {
         val extractedCode = extractCleanCodeBlock(rawCodeOrResponse)
         val cleanLang = detectSmartLanguage(language, extractedCode, preferredFileName)
-        val cleanFileName = normalizeSingleExactFileName(
+        val finalFileName = normalizeSingleExactFileName(
             preferredFileName = preferredFileName,
             projectTitle = projectTitle,
             language = cleanLang,
             code = extractedCode,
             overrideExt = null
         )
-        val cleanTitle = projectTitle.ifBlank { cleanFileName.substringBeforeLast('.') }
+        val cleanTitle = projectTitle.ifBlank { finalFileName.substringBeforeLast('.') }
+        val isWebPreviewable = cleanLang.contains("HTML", ignoreCase = true) ||
+            finalFileName.endsWith(".html", ignoreCase = true) ||
+            finalFileName.endsWith(".htm", ignoreCase = true) ||
+            extractedCode.contains("<!doctype html", ignoreCase = true) ||
+            extractedCode.contains("<html", ignoreCase = true) ||
+            (extractedCode.contains("<div", ignoreCase = true) && extractedCode.contains("<button", ignoreCase = true))
+
         val staged = PendingCodeStageRequest(
             projectTitle = cleanTitle,
-            preferredFileName = cleanFileName,
+            preferredFileName = finalFileName,
             language = cleanLang,
             cleanCode = extractedCode
         )
         pendingStagedCode = staged
         _workspaceState.value = _workspaceState.value.copy(
             currentProjectTitle = cleanTitle,
-            currentFileName = cleanFileName,
+            currentFileName = finalFileName,
             currentLanguage = cleanLang,
             currentCode = extractedCode,
             hasPendingUnsavedCode = true,
-            lastSaveSummary = "কোড প্রস্তুত ($cleanFileName) — বস, এটি কি Download/archer/ ফোল্ডারে সেভ করব?"
+            lastSaveSummary = "👀 '$finalFileName' প্রস্তুত — প্রিভিউ চেক করে বলুন, সব ঠিক থাকলে সাথে সাথে Google Drive ও Download/archer/-এ সেভ হবে।"
         )
         CodingSessionBus.start(
             CodingSession(
                 id = "code_${System.currentTimeMillis()}",
                 title = cleanTitle,
-                fileName = cleanFileName,
+                fileName = finalFileName,
                 language = cleanLang,
                 code = extractedCode,
                 savedPath = "",
                 isSaved = false,
                 isSyncedToDrive = false,
                 isPatchingCode = false,
-                activeTab = "EDITOR",
-                statusMessageBn = "কোড তৈরি সম্পন্ন ($cleanFileName) — ▶ Live Preview ট্যাবে রান করুন বা সেভ করুন।",
+                activeTab = if (isWebPreviewable) "PREVIEW" else "EDITOR",
+                statusMessageBn = "👀 লাইভ প্রিভিউ প্রস্তুত ($finalFileName)! চেক করে দেখুন সব ঠিক আছে কি না—আপনি বললেই Google Drive-এ সেভ করে দেবো।",
                 pendingSaveConfirmation = true,
                 isDiscarded = false
             )
@@ -183,9 +195,18 @@ class ArcherCodingAndContactsManager(private val context: Context) {
 
     /**
      * Saves ONLY ONE single clean file with the exact right extension into `Download/archer/`
-     * when the user confirms save. No duplicate `.zip`, no duplicate `.txt`, no subfolder clutter.
+     * and uploads 1 single copy to Google Drive (`/AI_OS_Memory/Argon4_Code` or `/ZIP_Packages`)
+     * when the user confirms after checking the preview!
      */
     fun confirmSavePendingCodeToArcherFolder(overrideExtension: String? = null): SavedArcherArtifact? {
+        if (GoogleDriveMemorySyncService.hasPendingStagedZip()) {
+            managerScope.launch {
+                GoogleDriveMemorySyncService.confirmSavePendingStagedZipToDrive(appContext)
+            }
+            _workspaceState.value = _workspaceState.value.copy(hasPendingUnsavedCode = false)
+            return null
+        }
+
         val staged = pendingStagedCode ?: CodingSessionBus.session.value?.let { s ->
             PendingCodeStageRequest(
                 projectTitle = s.title,
@@ -217,15 +238,21 @@ class ArcherCodingAndContactsManager(private val context: Context) {
         _workspaceState.value = _workspaceState.value.copy(hasPendingUnsavedCode = false)
         CodingSessionBus.markSaved(
             path = artifact.singleFilePath,
-            statusBn = "✔ সিঙ্গেল ফাইল সেভ হয়েছে: ${artifact.singleFilePath}"
+            statusBn = "✔ '${artifact.primaryFileName}' সিঙ্গেল ফাইল হিসেবে Download/archer/ ও Google Drive-এ সেভ হয়েছে!"
+        )
+        CodingSessionBus.markSyncedToDrive(
+            "✔ '${artifact.primaryFileName}' সরাসরি Google Drive (/AI_OS_Memory/Argon4_Code)-এ ১টি কপি হিসেবে সেভ হয়েছে!"
         )
         return artifact
     }
 
     /**
-     * Syncs the active code file in Coding Studio directly to the `AI_OS_Memory` folder in 5TB Google Drive.
+     * Syncs the active code file or staged ZIP package in Coding Studio directly to the `AI_OS_Memory` folder in 5TB Google Drive.
      */
     suspend fun syncCurrentCodeToGoogleDrive(): String = withContext(Dispatchers.IO) {
+        if (GoogleDriveMemorySyncService.hasPendingStagedZip()) {
+            return@withContext GoogleDriveMemorySyncService.confirmSavePendingStagedZipToDrive(appContext)
+        }
         val s = CodingSessionBus.session.value
         val fileName = s?.fileName ?: _workspaceState.value.currentFileName
         val code = s?.code ?: _workspaceState.value.currentCode
@@ -236,10 +263,11 @@ class ArcherCodingAndContactsManager(private val context: Context) {
             fileName = fileName,
             mimeType = mime,
             contentBytes = code.toByteArray(Charsets.UTF_8),
-            summaryDescription = "Coding Studio File: ${s?.title ?: fileName}"
+            summaryDescription = "Coding Studio File: ${s?.title ?: fileName}",
+            targetSubFolder = GoogleDriveMemorySyncService.SUBFOLDER_CODE
         )
         val msg = if (ok) {
-            "✔ আপনার 5TB Google Drive-এর AI_OS_Memory ফোল্ডারে '$fileName' সিঙ্ক হয়েছে!"
+            "✔ আপনার 5TB Google Drive-এর AI_OS_Memory/Argon4_Code ফোল্ডারে '$fileName' সিঙ্ক হয়েছে!"
         } else {
             "Google Drive-এ সিঙ্ক করতে সমস্যা হয়েছে, আবার চেষ্টা করুন।"
         }
@@ -324,18 +352,19 @@ class ArcherCodingAndContactsManager(private val context: Context) {
                     if (patchedCode.isNotBlank()) {
                         val shouldSwitchPreview = currentFileName.endsWith(".html", ignoreCase = true) ||
                             patchedCode.contains("<html", ignoreCase = true)
-                        pendingStagedCode = PendingCodeStageRequest(
+                        saveGeneratedCodeToArcherFolder(
                             projectTitle = currentTitle,
                             preferredFileName = currentFileName,
                             language = currentLang,
-                            cleanCode = patchedCode
+                            rawCodeOrResponse = patchedCode
                         )
+                        pendingStagedCode = null
                         _workspaceState.value = _workspaceState.value.copy(
                             currentCode = patchedCode,
-                            hasPendingUnsavedCode = true,
-                            lastSaveSummary = "ভয়েস নির্দেশনা অনুযায়ী '$currentFileName' আপডেট হয়েছে!"
+                            hasPendingUnsavedCode = false,
+                            lastSaveSummary = "ভয়েস নির্দেশনা অনুযায়ী '$currentFileName' আপডেট ও Google Drive-এ অটো-সেভ হয়েছে!"
                         )
-                        val msg = "জি বস, আপনার নির্দেশ অনুযায়ী '$currentFileName'-এর কোড আপডেট ও ফিক্স করে প্রিভিউ রিফ্রেশ করেছি।"
+                        val msg = "জি বস, আপনার নির্দেশ অনুযায়ী '$currentFileName'-এর কোড আপডেট ও ফিক্স করে সরাসরি Google Drive-এ অটো-সেভ করেছি।"
                         CodingSessionBus.updatePatchedCode(
                             newCode = patchedCode,
                             newFileName = currentFileName,
@@ -360,9 +389,10 @@ class ArcherCodingAndContactsManager(private val context: Context) {
      */
     fun discardPendingCode() {
         pendingStagedCode = null
+        GoogleDriveMemorySyncService.discardPendingStagedZip()
         _workspaceState.value = _workspaceState.value.copy(
             hasPendingUnsavedCode = false,
-            lastSaveSummary = "আপনার নির্দেশ অনুযায়ী কোড/লেখাটি কোনো ফোল্ডারে সেভ করা হয়নি।"
+            lastSaveSummary = "আপনার নির্দেশ অনুযায়ী কোড/ZIP প্যাকেজটি সেভ করা হয়নি।"
         )
         CodingSessionBus.markDiscarded()
     }
@@ -464,9 +494,21 @@ class ArcherCodingAndContactsManager(private val context: Context) {
             currentLanguage = cleanLang,
             currentCode = extractedCode,
             archerMainFolderPath = "/storage/emulated/0/Download/archer",
-            lastSaveSummary = "✔ সিঙ্গেল ফাইল সেভ হয়েছে: $publicFilePath (কোনো ডুপ্লিকেট ফাইল ছাড়া)",
+            lastSaveSummary = "✔ সিঙ্গেল ফাইল সেভ ও Google Drive-এ অটো-সিঙ্ক হয়েছে: $publicFilePath",
             savedArtifacts = updatedList.take(15)
         )
+
+        // Zero-Click Auto-Sync: Immediately upload/update the single file in Google Drive (/AI_OS_Memory/Argon4_Code)
+        managerScope.launch {
+            GoogleDriveMemorySyncService.backupGeneratedFileToDrive(
+                context = appContext,
+                fileName = finalFileName,
+                mimeType = mimeTypeForFileName(finalFileName),
+                contentBytes = extractedCode.toByteArray(Charsets.UTF_8),
+                summaryDescription = "Argon 4 Code Project: ${artifact.projectTitle}",
+                targetSubFolder = GoogleDriveMemorySyncService.SUBFOLDER_CODE
+            )
+        }
 
         return artifact
     }

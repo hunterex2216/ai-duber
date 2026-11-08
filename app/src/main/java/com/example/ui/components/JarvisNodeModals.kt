@@ -116,14 +116,12 @@ import com.example.data.AgentMemoryNoteEntity
 import com.example.data.PlatformAccountEntity
 import com.example.model.AgentPlanResponse
 import com.example.model.AgentStep
-import com.example.model.HeadlineItem
 import com.example.model.MusicMood
 import com.example.service.AccessibilityEngineState
 import com.example.service.CodingWorkspaceState
 import com.example.service.CubeSentinelBus
 import com.example.service.CubeSentinelState
 import com.example.service.DeviceHardwareSnapshot
-import com.example.service.MusicPlayerState
 import com.example.service.NotificationHubState
 import com.example.service.OfflineStudioAssetEngine
 import com.example.service.SavedArcherArtifact
@@ -230,9 +228,16 @@ fun MemoryAndPlatformIdsSheet(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "ব্যাকআপ স্ট্যাটাস (/${driveState.driveFolderName}): মেমোরি ${driveState.backedUpMemoriesCount}টি • কথোপকথন ${driveState.backedUpConversationsCount}টি • স্ক্রিনশট/ফাইল ${driveState.backedUpScreenshotsAndFilesCount}টি",
+                            text = "ব্যাকআপ স্ট্যাটাস (/${driveState.driveFolderName}): মেমোরি ${driveState.backedUpMemoriesCount}টি • কথোপকথন ${driveState.backedUpConversationsCount}টি • কোড/ফাইল ${driveState.backedUpScreenshotsAndFilesCount}টি • বড় ZIP প্যাকেজ ${driveState.backedUpZipPackagesCount}টি",
                             color = Color(0xFFB8D4F2),
                             fontSize = 10.5.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "📂 অটো সাব-ফোল্ডার: /Memories • /Conversations • /Argon4_Code • /ZIP_Packages • /Media_Screenshots • /Master_Backups",
+                            color = CyberCyan,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
@@ -1353,7 +1358,6 @@ fun ChatAndUniversalCrossAppSheet(
 @Composable
 fun SoulAndMusicWakeSheet(
     sentinelState: CubeSentinelState,
-    musicState: MusicPlayerState,
     onToggleSentinel: (Boolean) -> Unit,
     onSimulateHeyCube: () -> Unit,
     onSelectMood: (MusicMood) -> Unit,
@@ -3499,62 +3503,6 @@ fun LiveCameraAndScreenVisionSheet(
                         onClose()
                     },
                     modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun HeadlineDetailSheet(
-    headline: HeadlineItem,
-    onOpenInChrome: (String) -> Unit,
-    onAskAiAboutHeadline: (String) -> Unit,
-    onClose: () -> Unit
-) {
-    PremiumModalShell(
-        badgeText = "TODAY HEADLINE • INTELLIGENCE BRIEF",
-        title = "নিউজ ও সাইট ইন্টেলিজেন্স ব্রিফিং",
-        subtitle = headline.sourceUrl,
-        accentColor = CyberCyan,
-        secondaryAccent = MatrixGreen,
-        onClose = onClose
-    ) {
-        PremiumSectionCard(
-            title = headline.title,
-            subtitle = "সোর্স: ${headline.sourceUrl}",
-            icon = Icons.Default.Public,
-            accentColor = MatrixGreen
-        ) {
-            Text(
-                text = headline.summaryBn,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White,
-                lineHeight = 20.sp
-            )
-            Spacer(modifier = Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PremiumActionButton(
-                    text = "ক্রোমে সাইট খুলুন",
-                    icon = Icons.Default.OpenInNew,
-                    primaryColor = CyberCyan,
-                    secondaryColor = MatrixGreen,
-                    onClick = {
-                        onOpenInChrome(headline.sourceUrl)
-                        onClose()
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                PremiumActionButton(
-                    text = "🔊 বিস্তারিত শুনুন",
-                    primaryColor = MatrixGreen,
-                    secondaryColor = CyberCyan,
-                    isOutlined = true,
-                    onClick = {
-                        onAskAiAboutHeadline("এই বিষয়টি বিস্তারিত বুঝিয়ে বলো এবং মেমোরিতে রাখো: ${headline.title}")
-                        onClose()
-                    },
-                    modifier = Modifier.weight(1f)
                 )
             }
         }

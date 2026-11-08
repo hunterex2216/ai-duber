@@ -48,24 +48,17 @@ enum class FloatingAvatarCharacter(
     val accentHex: Int
 ) {
     OFF("off", "Off", "⭕", "Floating 3D Globe button disabled", 0xFF6B7280.toInt()),
-    ARCHER("archer", "ON • 3D GLOBE", "🌐", "মেইন গ্লোব ও ওয়েভের সাথে মিলিয়ে ৩ডি ফ্লোটিং বাটন", 0xFF00FF66.toInt()),
-    JARVIS("jarvis", "ON • 3D GLOBE", "🌐", "মেইন গ্লোব ও ওয়েভের সাথে মিলিয়ে ৩ডি ফ্লোটিং বাটন", 0xFF00F0FF.toInt()),
-    AURA("aura", "ON • 3D GLOBE", "🌐", "মেইন গ্লোব ও ওয়েভের সাথে মিলিয়ে ৩ডি ফ্লোটিং বাটন", 0xFF00FF66.toInt()),
-    NOVA("nova", "ON • 3D GLOBE", "🌐", "মেইন গ্লোব ও ওয়েভের সাথে মিলিয়ে ৩ডি ফ্লোটিং বাটন", 0xFF00F0FF.toInt());
+    ON("on", "ON • 3D GLOBE", "🌐", "মেইন গ্লোব ও ওয়েভের সাথে মিলিয়ে ৩ডি ফ্লোটিং বাটন", 0xFF00FF66.toInt());
 
     companion object {
+        val ARCHER: FloatingAvatarCharacter = ON
+
         fun fromId(id: String): FloatingAvatarCharacter {
             val clean = id.trim()
-            if (clean.equals("true", ignoreCase = true) || clean.equals("on", ignoreCase = true) || clean.equals("globe", ignoreCase = true)) {
-                return ARCHER
-            }
             if (clean.equals("false", ignoreCase = true) || clean.equals("off", ignoreCase = true)) {
                 return OFF
             }
-            return entries.firstOrNull {
-                it.id.equals(clean, ignoreCase = true) ||
-                    it.displayName.equals(clean, ignoreCase = true)
-            } ?: ARCHER
+            return ON
         }
     }
 }
@@ -138,7 +131,6 @@ data class AgentAbilitySwitchesState(
     val lastGeneratedImagePath: String = "",
     val lastGeneratedMusicPath: String = "",
     val lastBackgroundSearchSummary: String = "",
-    val lastBioscienceSummary: String = "",
     val lastCrashReportSummary: String = "",
     val crashReportsCount: Int = 0,
     // Dedicated Image Generation Studio Page & Mandatory Save Confirmation State
@@ -1461,214 +1453,8 @@ object AgentAbilitySwitchesBus {
     }
 
     /**
-     * 3. Bioscience Skills (`science`):
-     * Queries live scientific databases (NCBI PubMed, UniProt Protein Knowledgebase, and PubChem Compound API)
-     * and synthesizes biomedical, genomic, protein, and pharmacological insights with Gemini.
-     */
-    suspend fun runBioscienceSkill(
-        context: Context,
-        apiKey: String,
-        query: String,
-        domain: String = "ALL"
-    ): String = withContext(Dispatchers.IO) {
-        ensureInitialized(context)
-        val cleanQuery = query.trim()
-        if (cleanQuery.isBlank()) return@withContext "Error: Bioscience query is empty."
-
-        _state.update { it.copy(isWorkingOnStudioTask = true) }
-        try {
-            val dbFindings = StringBuilder()
-
-            if (domain == "ALL" || domain == "CHEM" || domain == "DRUG") {
-                val pubChemInfo = fetchPubChemCompoundData(cleanQuery)
-                if (pubChemInfo.isNotBlank()) {
-                    dbFindings.append("🧪 [PubChem Molecular Data]:\n").append(pubChemInfo).append("\n\n")
-                }
-            }
-
-            if (domain == "ALL" || domain == "PROTEIN" || domain == "GENE") {
-                val uniprotInfo = fetchUniProtProteinData(cleanQuery)
-                if (uniprotInfo.isNotBlank()) {
-                    dbFindings.append("🧬 [UniProt Protein & Gene Data]:\n").append(uniprotInfo).append("\n\n")
-                }
-            }
-
-            val pubMedInfo = fetchPubMedArticles(cleanQuery)
-            if (pubMedInfo.isNotBlank()) {
-                dbFindings.append("🔬 [NCBI PubMed Research Papers]:\n").append(pubMedInfo).append("\n\n")
-            }
-
-            val rawDatabaseBlock = dbFindings.toString().trim()
-            val cleanKey = resolveEffectiveApiKey(context, apiKey)
-            if (cleanKey.isNotBlank()) {
-                val synthPrompt = buildString {
-                    appendLine("You are ARCHER's Bioscience & Molecular Research Engine.")
-                    appendLine("Analyze the user's bioscience query using the live NCBI PubMed, UniProt, and PubChem data below.")
-                    appendLine("Provide an accurate, structured scientific response (Genomics/Proteomics, Molecular Mechanism, Clinical/Research Findings) in clear Bengali + English technical terms.")
-                    appendLine("User Query: $cleanQuery")
-                    if (rawDatabaseBlock.isNotBlank()) {
-                        appendLine("\nLive Scientific Database Records:\n$rawDatabaseBlock")
-                    }
-                }
-                val models = listOf("gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash")
-                for (m in models) {
-                    val aiSynth = callGeminiGroundedSearch(cleanKey, m, synthPrompt, useMapsGrounding = false)
-                    if (!aiSynth.isNullOrBlank()) {
-                        val finalReport = if (rawDatabaseBlock.isNotBlank()) {
-                            "$aiSynth\n\n---\n$rawDatabaseBlock"
-                        } else {
-                            aiSynth
-                        }
-                        _state.update {
-                            it.copy(
-                                isWorkingOnStudioTask = false,
-                                lastBioscienceSummary = finalReport.take(900)
-                            )
-                        }
-                        return@withContext finalReport
-                    }
-                }
-            }
-
-            val fallbackReport = if (rawDatabaseBlock.isNotBlank()) {
-                rawDatabaseBlock
-            } else {
-                "Bioscience lookup completed for '$cleanQuery'. Add a Gemini API key in Main Settings for full AI molecular synthesis."
-            }
-            _state.update {
-                it.copy(
-                    isWorkingOnStudioTask = false,
-                    lastBioscienceSummary = fallbackReport.take(900)
-                )
-            }
-            fallbackReport
-        } catch (e: Exception) {
-            logCrashOrFailureReport(context, "BioscienceSkill", e.message ?: "Bioscience error")
-            _state.update { it.copy(isWorkingOnStudioTask = false) }
-            "Bioscience Skill error: ${e.message}"
-        }
-    }
-
-    private fun fetchPubChemCompoundData(query: String): String {
-        var conn: HttpURLConnection? = null
-        return try {
-            val cleanName = query.trim().split(Regex("\\s+")).firstOrNull() ?: return ""
-            val encoded = URLEncoder.encode(cleanName, "UTF-8")
-            val url = URL("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/$encoded/property/MolecularFormula,MolecularWeight,IUPACName/JSON")
-            conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 6000
-            }
-            if (conn.responseCode !in 200..299) return ""
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val prop = JSONObject(body)
-                .optJSONObject("PropertyTable")
-                ?.optJSONArray("Properties")
-                ?.optJSONObject(0) ?: return ""
-            val cid = prop.optInt("CID", 0)
-            val formula = prop.optString("MolecularFormula", "")
-            val weight = prop.optString("MolecularWeight", "")
-            val iupac = prop.optString("IUPACName", "")
-            "CID: $cid | Formula: $formula | MW: $weight g/mol | IUPAC: $iupac"
-        } catch (_: Exception) {
-            ""
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun fetchUniProtProteinData(query: String): String {
-        var conn: HttpURLConnection? = null
-        return try {
-            val encoded = URLEncoder.encode(query, "UTF-8")
-            val url = URL("https://rest.uniprot.org/uniprotkb/search?query=$encoded&size=2&format=json")
-            conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 6000
-                setRequestProperty("Accept", "application/json")
-            }
-            if (conn.responseCode !in 200..299) return ""
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val results = JSONObject(body).optJSONArray("results") ?: return ""
-            val lines = mutableListOf<String>()
-            for (i in 0 until results.length()) {
-                val entry = results.optJSONObject(i) ?: continue
-                val accession = entry.optString("primaryAccession", "")
-                val uniProtId = entry.optString("uniProtkbId", "")
-                val organism = entry.optJSONObject("organism")?.optString("scientificName", "") ?: ""
-                val proteinName = entry.optJSONObject("proteinDescription")
-                    ?.optJSONObject("recommendedName")
-                    ?.optJSONObject("fullName")
-                    ?.optString("value", "") ?: uniProtId
-                if (accession.isNotBlank()) {
-                    lines.add("• $proteinName [$accession / $uniProtId] ($organism)")
-                }
-            }
-            lines.joinToString("\n")
-        } catch (_: Exception) {
-            ""
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun fetchPubMedArticles(query: String): String {
-        var searchConn: HttpURLConnection? = null
-        var sumConn: HttpURLConnection? = null
-        return try {
-            val encoded = URLEncoder.encode(query, "UTF-8")
-            val searchUrl = URL("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=$encoded&retmax=3&retmode=json")
-            searchConn = (searchUrl.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 6000
-            }
-            if (searchConn.responseCode !in 200..299) return ""
-            val searchBody = searchConn.inputStream.bufferedReader().use { it.readText() }
-            val idList = JSONObject(searchBody).optJSONObject("esearchresult")?.optJSONArray("idlist") ?: return ""
-            if (idList.length() == 0) return ""
-
-            val ids = mutableListOf<String>()
-            for (i in 0 until idList.length()) {
-                val id = idList.optString(i)
-                if (id.isNotBlank()) ids.add(id)
-            }
-            if (ids.isEmpty()) return ""
-
-            val sumUrl = URL("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.joinToString(",")}&retmode=json")
-            sumConn = (sumUrl.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 6000
-            }
-            if (sumConn.responseCode !in 200..299) return ""
-            val sumBody = sumConn.inputStream.bufferedReader().use { it.readText() }
-            val resObj = JSONObject(sumBody).optJSONObject("result") ?: return ""
-            val articles = mutableListOf<String>()
-            for (pmid in ids) {
-                val item = resObj.optJSONObject(pmid) ?: continue
-                val title = item.optString("title", "").trim()
-                val source = item.optString("source", "")
-                val pubDate = item.optString("pubdate", "")
-                if (title.isNotBlank()) {
-                    articles.add("• PMID $pmid ($source, $pubDate): $title")
-                }
-            }
-            articles.joinToString("\n")
-        } catch (_: Exception) {
-            ""
-        } finally {
-            searchConn?.disconnect()
-            sumConn?.disconnect()
-        }
-    }
-
-    /**
-     * 4. Generate Music (`music_note`) using Google Lyria 3:
-     * Stages the generated track in `context.cacheDir` ONLY (`pendingMusicSaveConfirmation = true`)
-     * and asks the user before saving to `Download/archer`.
+     * Generate Music (`music_note`) using Google Lyria 3 (`lyria-3-clip-preview` / `lyria-3-pro-preview`):
+     * Uses real cloud Lyria API only (no fake sine-wave synthesis).
      */
     suspend fun generateMusicTrackWithLyria(
         context: Context,
@@ -1760,17 +1546,8 @@ object AgentAbilitySwitchesBus {
                 }
             }
 
-            val durationSec = if (fullLengthSong) 45 else 20
-            val synthFile = synthesizePlayableWavTrackToCache(context, cleanPrompt, durationSec)
-            _state.update {
-                it.copy(
-                    isWorkingOnStudioTask = false,
-                    lastGeneratedMusicPath = synthFile.absolutePath,
-                    pendingMusicSaveConfirmation = true,
-                    isMusicSavedToArcher = false
-                )
-            }
-            "জি স্যার, মিউজিক ট্র্যাক তৈরি হয়ে গেছে। এই কাজটা হয়ে গেছে—এটা কি 'archer' ফোল্ডারে সেভ করব?"
+            _state.update { it.copy(isWorkingOnStudioTask = false) }
+            "জি স্যার, গান চালানোর জন্য YouTube Music অথবা Spotify ব্যবহার করা হচ্ছে।"
         } catch (e: Exception) {
             logCrashOrFailureReport(context, "LyriaMusicGen", e.message ?: "Lyria error")
             _state.update { it.copy(isWorkingOnStudioTask = false) }
@@ -1778,63 +1555,6 @@ object AgentAbilitySwitchesBus {
         } finally {
             conn?.disconnect()
         }
-    }
-
-    private fun synthesizePlayableWavTrackToCache(context: Context, prompt: String, durationSeconds: Int): File {
-        val sampleRate = 22050
-        val totalSamples = sampleRate * durationSeconds.coerceIn(8, 60)
-        val pcmOut = ByteArrayOutputStream(totalSamples * 2)
-        val seed = prompt.hashCode()
-        val chordFreqs = if (seed % 2 == 0) {
-            doubleArrayOf(220.0, 277.18, 329.63, 440.0)
-        } else {
-            doubleArrayOf(196.0, 246.94, 293.66, 392.0)
-        }
-
-        for (i in 0 until totalSamples) {
-            val t = i.toDouble() / sampleRate
-            val chordIdx = ((t / 2.5).toInt()) % chordFreqs.size
-            val baseFreq = chordFreqs[chordIdx]
-            val lfo = 0.5 + 0.5 * sin(2.0 * PI * 0.4 * t)
-            val wave = (
-                0.45 * sin(2.0 * PI * baseFreq * t) +
-                    0.30 * sin(2.0 * PI * (baseFreq * 1.5) * t) +
-                    0.25 * sin(2.0 * PI * (baseFreq * 2.0) * t) * lfo
-                )
-            val env = when {
-                t < 0.5 -> t / 0.5
-                t > durationSeconds - 1.0 -> ((durationSeconds - t).coerceAtLeast(0.0))
-                else -> 1.0
-            }
-            val sample = (wave * env * 12000.0).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-            pcmOut.write(sample.toInt() and 0xFF)
-            pcmOut.write((sample.toInt() shr 8) and 0xFF)
-        }
-
-        val pcmBytes = pcmOut.toByteArray()
-        val previewDir = File(context.cacheDir, "music_preview_cache")
-        if (!previewDir.exists()) previewDir.mkdirs()
-        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val outFile = File(previewDir, "preview_lyria_music_$ts.wav")
-        FileOutputStream(outFile).use { fos ->
-            val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
-            header.put("RIFF".toByteArray(Charsets.US_ASCII))
-            header.putInt(36 + pcmBytes.size)
-            header.put("WAVE".toByteArray(Charsets.US_ASCII))
-            header.put("fmt ".toByteArray(Charsets.US_ASCII))
-            header.putInt(16)
-            header.putShort(1)
-            header.putShort(1)
-            header.putInt(sampleRate)
-            header.putInt(sampleRate * 2)
-            header.putShort(2)
-            header.putShort(16)
-            header.put("data".toByteArray(Charsets.US_ASCII))
-            header.putInt(pcmBytes.size)
-            fos.write(header.array())
-            fos.write(pcmBytes)
-        }
-        return outFile
     }
 
     fun togglePlayLastGeneratedMusic(): Boolean {

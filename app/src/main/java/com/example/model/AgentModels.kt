@@ -56,7 +56,6 @@ enum class JarvisNodeModal {
     SOUL_AND_WAKE,
     SETTINGS_AND_PERMS,
     LIVE_CAMERA_VISION,
-    HEADLINE_DETAIL,
     CODING_AND_ARGON,
     MULTIMODAL_LIVE_API_HUB
 }
@@ -179,14 +178,6 @@ data class SmartRoutine(
     val accentHex: Long,
     val promptCommand: String,
     val presetSteps: List<AgentStep>
-)
-
-data class HeadlineItem(
-    val id: String,
-    val title: String,
-    val dateLabel: String,
-    val summaryBn: String,
-    val sourceUrl: String
 )
 
 enum class AgentVoiceGender(val labelBn: String) {

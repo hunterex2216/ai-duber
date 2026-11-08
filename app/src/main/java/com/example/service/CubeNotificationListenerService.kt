@@ -33,7 +33,7 @@ data class CachedReplyAction(
 
 data class NotificationHubState(
     val isListenerConnected: Boolean = false,
-    val messages: List<InterceptedAppNotification> = NotificationReplyBus.defaultSampleNotifications(),
+    val messages: List<InterceptedAppNotification> = emptyList(),
     val pendingOtpCode: String = "",
     val pendingOtpSourceApp: String = "",
     val pendingOtpSender: String = "",
@@ -235,35 +235,6 @@ object NotificationReplyBus {
         } catch (_: Exception) {
             false
         }
-    }
-
-    fun defaultSampleNotifications(): List<InterceptedAppNotification> {
-        return listOf(
-            InterceptedAppNotification(
-                key = "sample_wa_1",
-                packageName = "com.whatsapp",
-                appLabel = "WhatsApp",
-                senderOrTitle = "রাহিম ভাই (প্রজেক্ট গ্রুপ)",
-                messageBody = "আজকের মিটিংয়ের প্রেজেন্টেশন ফাইলটা কি রেডি হয়েছে? জানাও।",
-                canReplyInline = true
-            ),
-            InterceptedAppNotification(
-                key = "sample_tg_1",
-                packageName = "org.telegram.messenger",
-                appLabel = "Telegram",
-                senderOrTitle = "Tech & AI Resources Channel",
-                messageBody = "New Android Jarvis Toolkit PDF & APK v2.4 uploaded for members.",
-                canReplyInline = true
-            ),
-            InterceptedAppNotification(
-                key = "sample_fb_1",
-                packageName = "com.facebook.orca",
-                appLabel = "Messenger",
-                senderOrTitle = "তানভীর আহমেদ",
-                messageBody = "দোস্ত সিলেটের ট্যুর প্ল্যানটা কখন ফাইনাল করবি?",
-                canReplyInline = true
-            )
-        )
     }
 }
 

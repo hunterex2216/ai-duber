@@ -353,7 +353,7 @@ class MultimodalLiveService(
 
     private fun writeCodeDecl(): JSONObject = JSONObject().apply {
         put("name", "write_code")
-        put("description", "Dedicated Coding Studio (Mini AI IDE): Auto-switches to the Dedicated Coding Studio page with a Code Editor tab and Live WebView Preview tab. Pass the complete source code in 'code' and specify the exact extension in 'file_name' (.html, .py, .js, .kt, .json, .txt). Stages the code cleanly and saves ONLY ONE single file with its proper extension and MIME type in Download/archer/ (never creates duplicate .zip or .txt files) or syncs to 5TB Google Drive when confirmed.")
+        put("description", "Dedicated Coding Studio (Mini AI IDE): Auto-switches to the Dedicated Coding Studio page and immediately opens the Live Preview tab for HTML/CSS/JS websites so the user can inspect it first! Ask the user if everything looks good; once they confirm ('হ্যাঁ' / 'সেভ করো'), call confirm_pending_save to save 1 single copy to Google Drive (/AI_OS_Memory/Argon4_Code) and Download/archer/.")
         put("parameters", JSONObject().apply {
             put("type", "OBJECT")
             put("properties", JSONObject().apply {
@@ -471,14 +471,17 @@ class MultimodalLiveService(
         listOf("prompt")
     )
 
-    private fun bioscienceSkillDecl() = toolDecl(
-        "bioscience_skill",
-        "Run Bioscience & Molecular Research Skills: query live NCBI PubMed, UniProt Protein Knowledgebase, and PubChem databases and synthesize genomics, proteomics, pharmacology, or clinical insights.",
+    private fun cloudBotEngineDecl() = toolDecl(
+        "cloud_bot_engine",
+        "Super-Powerful Autonomous Cloud Bots (stored and executed using the user's 5TB Google Drive '/AI_OS_Memory/Cloud_Bots'): Create and run background bots for Web/Price/Site Monitoring, Auto-Message Assistant, or Scheduled Task Runner.",
         listOf(
-            "query" to "Gene, protein, drug compound, disease mechanism, or biomedical question (e.g. BRCA1, CRISPR, Aspirin)",
-            "domain" to "Optional domain filter: ALL, GENE, PROTEIN, or DRUG"
+            "name" to "Bot name (e.g. 'Price Monitor Bot', 'Auto Reply Bot')",
+            "bot_type" to "One of: WEB_PRICE_SITE_MONITOR, AUTO_MESSAGE_ASSISTANT, SCHEDULED_TASK_RUNNER",
+            "target_url_or_app" to "Target website URL or app name (e.g. 'https://example.com', 'WhatsApp')",
+            "instruction" to "Exact monitoring or automation instruction for the bot",
+            "interval_minutes" to "Optional check interval in minutes (default '30')"
         ),
-        listOf("query")
+        listOf("name", "bot_type", "instruction")
     )
 
     private fun generateMusicLyriaDecl() = toolDecl(
@@ -493,20 +496,20 @@ class MultimodalLiveService(
 
     private fun setAbilitySwitchDecl() = toolDecl(
         "set_ability_switch",
-        "Toggle one of the 7 Ability Permission Switches in Main Settings or change the Floating Avatar character when requested by the user.",
+        "Toggle one of the 7 Ability Permission Switches in Main Settings or toggle the Floating 3D Globe Avatar (ON or OFF).",
         listOf(
             "ability" to "One of: SILENT_EXECUTION, BACKGROUND_WEB_SEARCH, MAKE_IMAGES_WITH_GEMINI, IGNORE_BACKGROUND_AUDIO, SHOW_TAP_INDICATOR, SEND_CRASH_REPORTS, FLOATING_AVATAR",
-            "state" to "ON, OFF, or character name (ARCHER, JARVIS, AURA, NOVA, OFF) for FLOATING_AVATAR"
+            "state" to "ON or OFF"
         ),
         listOf("ability", "state")
     )
 
     private fun confirmPendingSaveDecl() = toolDecl(
         "confirm_pending_save",
-        "Save or discard the pending generated code, text, image, or music track ONLY after the user responds to your confirmation question ('এই কাজটা হয়ে গেছে—এটা কি সেভ করব?').",
+        "Save or discard the pending generated code, staged multi-MB ZIP package, image, or music track ONLY after the user checks the preview and confirms ('হ্যাঁ' / 'ঠিক আছে' / 'সেভ করো'). Uploads 1 single clean copy directly to 5TB Google Drive.",
         listOf(
-            "decision" to "Either 'SAVE' (when Sir says yes/হ্যাঁ সেভ করো) or 'DISCARD' (when Sir says no/না সেভ করতে হবে না/বাদ দাও)",
-            "target_type" to "Optional: 'ALL', 'IMAGE', 'CODE', or 'MUSIC'"
+            "decision" to "Either 'SAVE' (when Sir says yes/হ্যাঁ/ঠিক আছে/সেভ করো) or 'DISCARD' (when Sir says no/না সেভ করতে হবে না/বাদ দাও)",
+            "target_type" to "Optional: 'ALL', 'ZIP', 'CODE', 'IMAGE', or 'MUSIC'"
         ),
         listOf("decision")
     )
@@ -605,6 +608,31 @@ class MultimodalLiveService(
         listOf("operation")
     )
 
+    private fun googleDriveCloudOsDecl() = toolDecl(
+        "google_drive_cloud_os",
+        "Autonomous 5TB Google Drive Cloud OS Storage Engine: Use this tool whenever the user asks to create a folder in Google Drive, build a large multi-MB .zip archive or project package (e.g., 2MB, 5MB, 10MB, 25MB, 50MB ZIP), sync all data, or save any file directly to Google Drive. When operation='BUILD_LARGE_ZIP', it FIRST builds and opens the ZIP package preview on screen so the user can check that everything is right; once the user says 'হ্যাঁ / ঠিক আছে / সেভ করো', call confirm_pending_save (or operation='CONFIRM_SAVE_ZIP') to upload 1 single copy to '/AI_OS_Memory/ZIP_Packages'!",
+        listOf(
+            "operation" to "One of: BUILD_LARGE_ZIP, CONFIRM_SAVE_ZIP, CREATE_FOLDER, SAVE_SINGLE_FILE, SYNC_ALL, SEARCH_DRIVE",
+            "name" to "Folder name, project title, or file/ZIP name (e.g. 'Mega_Project.zip', 'AI_Dataset_10MB.zip', 'My_New_Folder')",
+            "size_mb" to "Target size in MB when operation='BUILD_LARGE_ZIP' (e.g. '5', '10', '20', '50'; default '2')",
+            "content_or_spec" to "Optional code, text content, or project specification to include inside the file or ZIP",
+            "sub_folder" to "Optional target sub-folder inside /AI_OS_Memory (default 'ZIP_Packages' for ZIPs, 'Argon4_Code' for code)"
+        ),
+        listOf("operation", "name")
+    )
+
+    private fun voiceBiometricsControlDecl() = toolDecl(
+        "voice_biometrics_control",
+        "Biometric Speaker Identification, Owner Voice Lock & Real-Time Male/Female/Child Gender Detection (`VoiceBiometricsEngine`): Enroll Boss's voice ('বসের ভয়েস লক / আমার কণ্ঠ লক করো'), enroll friends/family by voice command (e.g. 'এই কণ্ঠটা সিয়ামের নামে সেভ রাখো'), check who is currently speaking & their gender ('ছেলে' Male / 'মেয়ে' Female / 'শিশু' Child) and pitch Hz, delete a voice profile, or toggle the Voice Security Gate.",
+        listOf(
+            "operation" to "One of: ENROLL_BOSS_VOICE, ENROLL_GUEST_VOICE, WHO_IS_SPEAKING, UPDATE_GENDER_PERCEPTION, SET_VOICE_LOCK, DELETE_VOICE_PROFILE",
+            "speaker_name" to "Name of the speaker to enroll or delete (e.g. 'বস', 'সিয়াম', 'রাহাত', 'মীম')",
+            "gender_hint" to "Optional gender/age perception from live audio: MALE ('ছেলে'), FEMALE ('মেয়ে'), or CHILD ('শিশু')",
+            "lock_enabled" to "When operation='SET_VOICE_LOCK': 'ON' or 'OFF'"
+        ),
+        listOf("operation")
+    )
+
     private fun buildAllFunctionDeclarations(): JSONArray = JSONArray()
         .put(prepareAndHighlightDecl())
         .put(executeConfirmedClickDecl())
@@ -612,6 +640,9 @@ class MultimodalLiveService(
         .put(searchMemoryDecl())
         .put(saveLocalMemoryDecl())
         .put(searchLocalMemoryDecl())
+        .put(googleDriveCloudOsDecl())
+        .put(cloudBotEngineDecl())
+        .put(voiceBiometricsControlDecl())
         .put(notificationAndOtpAssistDecl())
         .put(hardwareAndCameraControlDecl())
         .put(
@@ -678,6 +709,8 @@ class MultimodalLiveService(
         if (customPersonalityPrompt.isNotBlank()) {
             append("\nUSER CUSTOM PERSONALITY RULE: ").append(customPersonalityPrompt)
         }
+        append("\n\n")
+        append(VoiceBiometricsEngine.buildPromptContextForGeminiLive())
         append("\n\n")
         append(AppKnowledgeRegistry.compactSummaryForSystemPrompt())
         append(SmartMemoryAndSelfUpdateEngine.buildEvolutionContextForPrompt())
@@ -1297,7 +1330,13 @@ class MultimodalLiveService(
                             loudFrames = 0
                         }
 
-                        sendRealtimeAudioChunkOverWs(bb.array())
+                        val pcmFrameBytes = bb.array()
+                        VoiceBiometricsEngine.processIncoming16kHzPcmFrame(
+                            context = context,
+                            pcm16LeBytes = pcmFrameBytes,
+                            isAgentCurrentlySpeaking = _state.value.isAgentSpeakingLive
+                        )
+                        sendRealtimeAudioChunkOverWs(pcmFrameBytes)
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -1937,9 +1976,9 @@ class MultimodalLiveService(
                - When speaking proactively on your own, do NOT click buttons or call `phone_action` tools until Boss replies and asks you to act.
                - If you see an error, broken layout, suspicious link, or risky button on screen, warn Boss immediately using your own judgment and never click final action buttons (`Send`, `Install`, `Submit`, `Delete`, `Pay`) without explicit confirmation.
 
-            2. DEDICATED CODING STUDIO (MINI AI IDE) & SINGLE-FILE CLEAN EXPORT (`write_code`):
-               - Whenever the user asks to write, fix, or build code/websites/scripts, call `write_code` so the app automatically opens the Dedicated Coding Studio page with Tab 1 (`Code Editor` with line numbers & syntax highlighting) and Tab 2 (`▶ Live Preview / Run` in a sandboxed WebView).
-               - Single-File Clean Export: When saving code or text, detect the exact requested format (`.html`, `.py`, `.js`, `.kt`, `.json`, `.txt`) and save ONLY ONE single clean file with the proper extension and MIME type in `Download/archer/` (never create duplicate `.zip` or extra `.txt` files).
+            2. DEDICATED CODING STUDIO (MINI AI IDE) & ZERO-CLICK GOOGLE DRIVE AUTO-SAVE (`write_code` & `google_drive_cloud_os`):
+               - Whenever the user asks to write, fix, or build code/websites/scripts, call `write_code`. It automatically saves ONLY ONE single clean file in `Download/archer/` AND inside `/AI_OS_Memory/Argon4_Code` on the user's 5TB Google Drive without requiring any manual confirmation or click!
+               - Whenever the user asks to create a folder, a large project folder, or a large multi-MB `.zip` archive (e.g. "একটা বড় ফোল্ডার বা ১০ এমবির জিফ/ZIP ফাইল তৈরি করে গুগল ড্রাইভে রাখো"), call `google_drive_cloud_os(operation="BUILD_LARGE_ZIP", name="...", size_mb="...")` or `google_drive_cloud_os(operation="CREATE_FOLDER", name="...")`. It automatically builds and saves ONLY ONE single copy directly into `/AI_OS_Memory/ZIP_Packages` on Google Drive!
 
             3. NANO BANANA (`gemini-2.5-flash-image`) DEDICATED IMAGE STUDIO (`make_image_with_gemini`):
                - Whenever the user asks via voice or text to generate or edit an image, call `make_image_with_gemini` (with `edit_existing="true"` when modifying the currently displayed image). The app automatically switches to the Dedicated Image Studio page, expands short/Bangla commands into a detailed 8K English prompt, and renders the full HD image cleanly.
@@ -1955,8 +1994,8 @@ class MultimodalLiveService(
                - Detect incoming messages and OTPs via `NotificationListenerService`.
                - NEVER auto-fill OTPs! Announce the OTP via voice and ask the user for confirmation before calling `notification_and_otp_assist(mode="PASTE_CONFIRMED_OTP")` or `execute_confirmed_click(decision="APPROVE")`.
 
-            6. HYBRID LOCAL SQLITE + 5TB GOOGLE DRIVE MEMORY (`save_memory` & `search_memory`):
-               - Recent memories and conversation summaries from the local SQLite database are automatically injected into your `system_instruction` for fast startup, while all memories, conversation summaries, screenshots, and files are automatically backed up via Google Drive REST API v3 into the `AI_OS_Memory` folder on the user's 5TB Google Drive (zero impact on main phone storage).
+            6. HYBRID LOCAL SQLITE + 5TB GOOGLE DRIVE CLOUD OS STORAGE (`save_memory`, `search_memory`, `google_drive_cloud_os`):
+               - Your 5TB Google Drive (`/AI_OS_Memory`) is automatically organized into 6 sub-folders (`Memories`, `Conversations`, `Argon4_Code`, `ZIP_Packages`, `Media_Screenshots`, `Master_Backups`) and auto-syncs on app open and on every new data item with zero clicks needed.
                - Whenever the user shares preferences, important facts, or asks you to remember something, call `save_memory(title="...", content="...", category="...")`.
                - When asked about past conversations, notes, screenshots, or files, call `search_memory(query="...")` to search across BOTH local SQLite and the user's 5TB Google Drive (`AI_OS_Memory`).
 

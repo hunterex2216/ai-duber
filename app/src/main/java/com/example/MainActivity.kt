@@ -227,7 +227,6 @@ fun OmniAgentApp(
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val plans by viewModel.agentPlans.collectAsStateWithLifecycle()
-    val musicState by viewModel.musicState.collectAsStateWithLifecycle()
     val hardwareState by viewModel.hardwareState.collectAsStateWithLifecycle()
     val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
     val sentinelState by viewModel.sentinelState.collectAsStateWithLifecycle()
@@ -237,7 +236,6 @@ fun OmniAgentApp(
     val todayTasks by viewModel.todayTasks.collectAsStateWithLifecycle()
     val platformAccounts by viewModel.platformAccounts.collectAsStateWithLifecycle()
     val activeModal by viewModel.activeModal.collectAsStateWithLifecycle()
-    val selectedHeadline by viewModel.selectedHeadline.collectAsStateWithLifecycle()
     val isFrontCameraSelected by viewModel.isFrontCameraSelected.collectAsStateWithLifecycle()
     val geminiApiKey by viewModel.geminiApiKeyState.collectAsStateWithLifecycle()
     val liveUserTranscript by viewModel.liveUserTranscript.collectAsStateWithLifecycle()
@@ -263,7 +261,6 @@ fun OmniAgentApp(
             plans = plans,
             liveUserTranscript = liveUserTranscript,
             liveArcherReply = liveArcherReply,
-            musicState = musicState,
             hardwareState = hardwareState,
             voiceState = voiceState,
             sentinelState = sentinelState,
@@ -272,9 +269,7 @@ fun OmniAgentApp(
             memoryNotes = memoryNotes,
             todayTasks = todayTasks,
             platformAccounts = platformAccounts,
-            headlines = viewModel.headlines,
             activeModal = activeModal,
-            selectedHeadline = selectedHeadline,
             isFrontCameraSelected = isFrontCameraSelected,
             geminiApiKey = geminiApiKey,
             onSaveGeminiApiKey = { viewModel.updateGeminiApiKey(it) },
@@ -285,7 +280,7 @@ fun OmniAgentApp(
             onSelectMood = { viewModel.playMoodImmediately(it) },
             onOpenExternalMusic = { query, artist -> viewModel.openExternalMusicApp(query, artist) },
             onStopSpeaking = { viewModel.stopAllAgentActivity() },
-            onTogglePlayMusic = { viewModel.musicEngine.togglePlayPause() },
+            onTogglePlayMusic = { viewModel.deviceExecutor.toggleSystemMediaPlayPause() },
             onToggleTts = { viewModel.toggleLiveSpeakerMute() },
             onSpeakText = { viewModel.speakTextAloud(it) },
             onReplayLastSpeech = { viewModel.replayLastAgentResponse() },
@@ -349,7 +344,6 @@ fun OmniAgentApp(
             onStartVoiceListening = { viewModel.onMainGlobeTap() },
             onStopVoiceListening = { viewModel.stopAllAgentActivity() },
             onOpenModal = { viewModel.openModal(it) },
-            onSelectHeadline = { viewModel.openHeadlineDetail(it) },
             onToggleCameraFacing = { viewModel.toggleCameraLens() },
             onLaunchSystemCamera = {
                 viewModel.deviceExecutor.openCameraApp(false)
