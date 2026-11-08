@@ -279,15 +279,7 @@ fun MemoryAndPlatformIdsSheet(
                         ) {
                             Button(
                                 onClick = {
-                                    try {
-                                        val client = com.example.service.GoogleDriveMemorySyncService.buildGoogleSignInClient(context)
-                                        driveSignInLauncher.launch(client.signInIntent)
-                                    } catch (_: Exception) {
-                                        com.example.service.GoogleDriveMemorySyncService.connectGmailHybridAccount(
-                                            context = context,
-                                            email = "mdriyan1678@gmail.com"
-                                        )
-                                    }
+                                    com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(context)
                                 },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (driveState.isConnected) MatrixGreen else CyberCyan,
@@ -298,7 +290,7 @@ fun MemoryAndPlatformIdsSheet(
                                     .testTag("connect_google_drive_button")
                             ) {
                                 Text(
-                                    text = if (driveState.isConnected) "✅ Connected (${driveState.linkedEmail.substringBefore("@")})" else "☁️ Connect Google Drive",
+                                    text = if (driveState.isConnected) "✅ API Connected (${driveState.linkedEmail.substringBefore("@")})" else "☁️ Connect Google Drive API",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 11.5.sp,
                                     maxLines = 1
@@ -314,6 +306,68 @@ fun MemoryAndPlatformIdsSheet(
                                 ) {
                                     Text("Unlink", color = Color(0xFFFF8A80), fontSize = 11.sp)
                                 }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    com.example.service.GoogleDriveMemorySyncService.triggerFullSyncFromUi(context)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = CyberCyan,
+                                    contentColor = Color.Black
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("sync_all_google_drive_button")
+                            ) {
+                                Text(
+                                    text = if (driveState.isSyncing) "⏳ সিঙ্ক হচ্ছে..." else "🔄 সব ডাটা সিঙ্ক করুন",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    com.example.service.GoogleDriveMemorySyncService.openOrShareToGoogleDriveApp(context)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = OfficialEmerald,
+                                    contentColor = Color.Black
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("open_google_drive_app_button")
+                            ) {
+                                Text(
+                                    text = "📤 Drive অ্যাপে খুলুন",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                        if (driveState.recentCloudFiles.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "📂 সর্বশেষ সিঙ্ককৃত ফাইল (/${driveState.driveFolderName}):",
+                                color = CyberCyan,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            driveState.recentCloudFiles.take(4).forEach { cf ->
+                                Text(
+                                    text = "• ${cf.name} — ${cf.snippetText.take(65)}",
+                                    color = Color(0xFFD5EDE4),
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
                     }
@@ -2045,27 +2099,33 @@ fun SettingsAndPermissionsSheet(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             PremiumActionButton(
-                                text = if (driveState.isConnected) "✔ জিমেইল পরিবর্তন" else "☁️ Connect Google Drive",
+                                text = if (driveState.isConnected) "✔ জিমেইল পরিবর্তন" else "☁️ Connect Google Drive API",
                                 primaryColor = if (driveState.isConnected) OfficialEmerald else OfficialSkyBlue,
                                 onClick = {
-                                    driveSignInLauncher.launch(
-                                        com.example.service.GoogleDriveMemorySyncService.buildGoogleSignInClient(context).signInIntent
-                                    )
+                                    com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(context)
                                 },
                                 modifier = Modifier.weight(1f)
                             )
-                            if (driveState.isConnected) {
-                                PremiumActionButton(
-                                    text = "🔄 ফোল্ডার ভেরিফাই",
-                                    primaryColor = OfficialSkyBlue,
-                                    isOutlined = true,
-                                    onClick = {
-                                        com.example.service.GoogleDriveMemorySyncService.init(context)
-                                    },
-                                    modifier = Modifier.weight(0.85f)
-                                )
-                            }
+                            PremiumActionButton(
+                                text = if (driveState.isSyncing) "⏳ সিঙ্ক হচ্ছে..." else "🔄 সব সিঙ্ক করুন",
+                                primaryColor = OfficialSkyBlue,
+                                isOutlined = true,
+                                onClick = {
+                                    com.example.service.GoogleDriveMemorySyncService.triggerFullSyncFromUi(context)
+                                },
+                                modifier = Modifier.weight(0.95f)
+                            )
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        PremiumActionButton(
+                            text = "📤 Google Drive অ্যাপে ফাইল খুলুন / সেভ করুন",
+                            primaryColor = OfficialEmerald,
+                            isOutlined = true,
+                            onClick = {
+                                com.example.service.GoogleDriveMemorySyncService.openOrShareToGoogleDriveApp(context)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }

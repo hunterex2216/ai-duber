@@ -684,7 +684,13 @@ class UnifiedAudioRouterService : Service() {
         } else {
             UnifiedAudioRouterBus.refreshDevicesAndApplyRouting()
         }
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        AppTaskRemovedShutdownBus.shutdownEverythingOnTaskRemoved(applicationContext)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder

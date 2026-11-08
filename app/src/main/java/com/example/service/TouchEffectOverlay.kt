@@ -527,6 +527,10 @@ object FloatingAvatarOverlayBus {
     private val _rmsLevel = MutableStateFlow(0f)
     val rmsLevel: StateFlow<Float> = _rmsLevel.asStateFlow()
 
+    @Volatile
+    var isAppSessionAlive: Boolean = true
+        private set
+
     private var avatarView: FloatingAvatarBubbleView? = null
     private var wm: WindowManager? = null
     private var layoutParams: WindowManager.LayoutParams? = null
@@ -537,10 +541,32 @@ object FloatingAvatarOverlayBus {
         ConfirmationGateBus.init(ctx)
     }
 
+    /**
+     * Marks whether the main application session is alive (open or minimized) vs. completely swiped away
+     * from Recent Apps. When `alive == false`, all floating overlays are immediately destroyed and prevented
+     * from re-opening until the user launches the app again.
+     */
+    fun setAppSessionAlive(alive: Boolean) {
+        isAppSessionAlive = alive
+        if (!alive) {
+            _isAppInForeground.value = false
+            _isSpeakingPulse.value = false
+            _isListeningPulse.value = false
+            _rmsLevel.value = 0f
+            hideOverlayWindow()
+            ConfirmationGateBus.clearTargetLock()
+            TouchEffectOverlay.hide()
+        }
+    }
+
     fun setAppInForeground(inForeground: Boolean) {
+        if (!isAppSessionAlive) {
+            hideOverlayWindow()
+            return
+        }
         _isAppInForeground.value = inForeground
         main.post {
-            if (inForeground || _character.value == FloatingAvatarCharacter.OFF) {
+            if (!isAppSessionAlive || inForeground || _character.value == FloatingAvatarCharacter.OFF) {
                 hideOverlayWindow()
             } else {
                 ensureOrUpdateOverlayWindow(_character.value)
@@ -551,7 +577,7 @@ object FloatingAvatarOverlayBus {
     fun setCharacter(char: FloatingAvatarCharacter) {
         _character.value = char
         main.post {
-            if (char == FloatingAvatarCharacter.OFF || _isAppInForeground.value) {
+            if (!isAppSessionAlive || char == FloatingAvatarCharacter.OFF || _isAppInForeground.value) {
                 hideOverlayWindow()
             } else {
                 ensureOrUpdateOverlayWindow(char)
@@ -560,6 +586,7 @@ object FloatingAvatarOverlayBus {
     }
 
     fun updateSpeakingPulse(speaking: Boolean) {
+        if (!isAppSessionAlive) return
         if (_isSpeakingPulse.value != speaking) {
             _isSpeakingPulse.value = speaking
             main.post {
@@ -573,6 +600,7 @@ object FloatingAvatarOverlayBus {
     }
 
     fun updateVoiceWaveState(speaking: Boolean, listening: Boolean, rms: Float) {
+        if (!isAppSessionAlive) return
         _isSpeakingPulse.value = speaking
         _isListeningPulse.value = listening
         _rmsLevel.value = rms.coerceIn(0f, 1f)
@@ -586,6 +614,10 @@ object FloatingAvatarOverlayBus {
     }
 
     fun refreshIfAccessibilityConnected() {
+        if (!isAppSessionAlive) {
+            hideOverlayWindow()
+            return
+        }
         val current = _character.value
         if (current != FloatingAvatarCharacter.OFF && !_isAppInForeground.value) {
             main.post { ensureOrUpdateOverlayWindow(current) }
@@ -593,7 +625,7 @@ object FloatingAvatarOverlayBus {
     }
 
     private fun ensureOrUpdateOverlayWindow(char: FloatingAvatarCharacter) {
-        if (_isAppInForeground.value || char == FloatingAvatarCharacter.OFF) {
+        if (!isAppSessionAlive || _isAppInForeground.value || char == FloatingAvatarCharacter.OFF) {
             hideOverlayWindow()
             return
         }
@@ -663,12 +695,29 @@ object FloatingAvatarOverlayBus {
     }
 
     fun hideOverlayWindow() {
+        val currentView = avatarView
+        val currentWm = wm
+        avatarView = null
+        layoutParams = null
         main.post {
-            try {
-                avatarView?.let { wm?.removeView(it) }
-            } catch (_: Exception) {}
-            avatarView = null
-            layoutParams = null
+            if (currentView != null) {
+                try {
+                    currentWm?.removeViewImmediate(currentView)
+                } catch (_: Exception) {
+                    try {
+                        currentWm?.removeView(currentView)
+                    } catch (_: Exception) {}
+                }
+                try {
+                    val accWm = AccessibilityAutomationBus.serviceInstance
+                        ?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                    accWm?.removeViewImmediate(currentView)
+                } catch (_: Exception) {}
+                try {
+                    val appWm = appCtx?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                    appWm?.removeViewImmediate(currentView)
+                } catch (_: Exception) {}
+            }
         }
     }
 }

@@ -13,14 +13,62 @@ import android.os.IBinder
 import androidx.core.content.ContextCompat
 
 /**
- * Keeps Gemini Live (mic + connection) alive when the app is in the background, so the agent keeps
- * listening and working "anywhere" until the user says stop.
+ * Central coordinator that completely stops all background/foreground services, Gemini Live audio/WebSocket,
+ * wake-word listeners, screen capture, and floating overlays whenever the user swipes/removes the app from Recent Apps.
+ */
+object AppTaskRemovedShutdownBus {
+    @Volatile
+    private var viewModelShutdownCallback: (() -> Unit)? = null
+
+    fun registerViewModelShutdown(callback: () -> Unit) {
+        viewModelShutdownCallback = callback
+    }
+
+    fun shutdownEverythingOnTaskRemoved(context: Context) {
+        val appCtx = context.applicationContext
+        // 1. Immediately destroy and lock out the Floating AI Orb, Neon Target Ring, and Touch Overlays
+        FloatingAvatarOverlayBus.setAppSessionAlive(false)
+        ConfirmationGateBus.clearTargetLock()
+        TouchEffectOverlay.hide()
+
+        // 2. Cancel all pending Accessibility macros
+        AccessibilityAutomationBus.cancelAllPendingMacros()
+
+        // 3. Stop ViewModel / Gemini Live WebSocket / Mic / Speaker / TTS / Music
+        try {
+            viewModelShutdownCallback?.invoke()
+        } catch (_: Exception) {
+        }
+        ExternalMicArbiter.setGeminiLiveOwningMic(false)
+
+        // 4. Stop all foreground and background services
+        LiveKeepAliveService.stop(appCtx)
+        CubeWakeWordService.stopService(appCtx)
+        PermanentScreenCaptureService.stopService(appCtx)
+        try {
+            appCtx.stopService(Intent(appCtx, UnifiedAudioRouterService::class.java))
+        } catch (_: Exception) {
+        }
+
+        // 5. Clear any lingering foreground notifications
+        try {
+            val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancelAll()
+        } catch (_: Exception) {
+        }
+    }
+}
+
+/**
+ * Keeps Gemini Live (mic + connection) alive when the app is minimized, and cleanly shuts down
+ * everything when the user swipes the app away from Recent Apps.
  */
 class LiveKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -47,6 +95,13 @@ class LiveKeepAliveService : Service() {
             stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        AppTaskRemovedShutdownBus.shutdownEverythingOnTaskRemoved(applicationContext)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     companion object {

@@ -61,6 +61,8 @@
         <package android:name="com.google.android.tts" />
         <package android:name="com.google.android.googlequicksearchbox" />
         <package android:name="com.google.android.as" />
+        <package android:name="com.google.android.apps.docs" />
+        <package android:name="com.google.android.gms" />
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
@@ -149,23 +151,27 @@
             android:name=".service.CubeWakeWordService"
             android:enabled="true"
             android:exported="false"
+            android:stopWithTask="true"
             android:foregroundServiceType="microphone" />
 
         <service
             android:name=".service.LiveKeepAliveService"
             android:enabled="true"
             android:exported="false"
+            android:stopWithTask="true"
             android:foregroundServiceType="microphone" />
 
         <service
             android:name=".service.UnifiedAudioRouterService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:stopWithTask="true" />
 
         <service
             android:name=".service.PermanentScreenCaptureService"
             android:enabled="true"
             android:exported="false"
+            android:stopWithTask="true"
             android:foregroundServiceType="mediaProjection" />
 
         <service

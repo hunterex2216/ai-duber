@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         com.example.service.TouchEffectBus.load(this)
         com.example.service.FloatingAvatarOverlayBus.init(this)
+        com.example.service.FloatingAvatarOverlayBus.setAppSessionAlive(true)
         com.example.service.FloatingAvatarOverlayBus.setAppInForeground(true)
 
         // STEP 1: Configure App Check with launch intent before any UI or Firebase operations
@@ -86,11 +87,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        com.example.service.FloatingAvatarOverlayBus.setAppSessionAlive(true)
         com.example.service.FloatingAvatarOverlayBus.setAppInForeground(true)
     }
 
     override fun onResume() {
         super.onResume()
+        com.example.service.FloatingAvatarOverlayBus.setAppSessionAlive(true)
         com.example.service.FloatingAvatarOverlayBus.setAppInForeground(true)
         AccessibilityAutomationBus.syncPermissionState(this)
         NotificationReplyBus.syncPermissionState(this)
@@ -99,7 +102,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        com.example.service.FloatingAvatarOverlayBus.setAppInForeground(false)
+        if (!isFinishing) {
+            com.example.service.FloatingAvatarOverlayBus.setAppInForeground(false)
+        }
+    }
+
+    override fun onDestroy() {
+        if (!isChangingConfigurations) {
+            com.example.service.AppTaskRemovedShutdownBus.shutdownEverythingOnTaskRemoved(applicationContext)
+        }
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -160,6 +172,46 @@ fun OmniAgentApp(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         viewModel.onOneTimeScreenCapturePermissionResult(result.resultCode, result.data)
+    }
+
+    val driveIntentSenderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        com.example.service.GoogleDriveMemorySyncService.handleAuthorizationIntentResult(
+            context = context,
+            data = result.data,
+            onStatusSpoken = { msg -> viewModel.speakTextAloud(msg) }
+        )
+    }
+
+    val pendingDriveIntentSender by com.example.service.GoogleDriveMemorySyncService.pendingAuthIntentSender.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingDriveIntentSender) {
+        val senderReq = pendingDriveIntentSender ?: return@LaunchedEffect
+        com.example.service.GoogleDriveMemorySyncService.consumePendingAuthIntentSender()
+        try {
+            driveIntentSenderLauncher.launch(senderReq)
+        } catch (_: Exception) {
+        }
+    }
+
+    val driveAuthRecoveryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        com.example.service.GoogleDriveMemorySyncService.onAuthRecoveryResult(
+            context = context,
+            data = result.data,
+            onStatusSpoken = { msg -> viewModel.speakTextAloud(msg) }
+        )
+    }
+
+    val pendingDriveAuthIntent by com.example.service.GoogleDriveMemorySyncService.pendingAuthRecoveryIntent.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingDriveAuthIntent) {
+        val recoveryIntent = pendingDriveAuthIntent ?: return@LaunchedEffect
+        com.example.service.GoogleDriveMemorySyncService.consumePendingAuthRecoveryIntent()
+        try {
+            driveAuthRecoveryLauncher.launch(recoveryIntent)
+        } catch (_: Exception) {
+        }
     }
 
     LaunchedEffect(Unit) {

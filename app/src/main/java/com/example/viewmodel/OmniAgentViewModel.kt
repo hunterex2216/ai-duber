@@ -943,6 +943,9 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         com.example.service.GoogleDriveMemorySyncService.init(ctx)
         com.example.service.ExternalMicArbiter.init(ctx)
         com.example.service.ExternalMicArbiter.setGeminiLiveOwningMic(true)
+        com.example.service.AppTaskRemovedShutdownBus.registerViewModelShutdown {
+            shutdownAgentCompletelyOnTaskRemoved()
+        }
 
         // Keep old STT/TTS off so Gemini Live exclusively owns the microphone and speaker
         voiceBridge.setHandsFreeContinuousMode(false)
@@ -1103,6 +1106,36 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         // Keep lightweight wake-word sentinel on standby so calling its name or reopening wakes it up
         CubeWakeWordService.startService(ctx)
         CubeSentinelBus.setSentinelActive(true)
+    }
+
+    /**
+     * Invoked when the user swipes/closes the app from Recent Apps (`onTaskRemoved` / `MainActivity.onDestroy`).
+     * Shuts down 100% of active sessions, audio, overlays, and services WITHOUT restarting any wake-word service.
+     */
+    fun shutdownAgentCompletelyOnTaskRemoved() {
+        val ctx = getApplication<Application>().applicationContext
+        _isAgentPoweredOff.value = true
+        poweredOffAtMs = System.currentTimeMillis()
+        activeCommandJob?.cancel()
+        activeWatcherJobs.values.forEach { it.cancel() }
+        activeWatcherJobs.clear()
+        AccessibilityAutomationBus.cancelAllPendingMacros()
+        com.example.service.FloatingAvatarOverlayBus.setAppSessionAlive(false)
+        musicEngine.stop()
+        voiceBridge.setHandsFreeContinuousMode(false)
+        voiceBridge.stopSpeaking()
+        voiceBridge.stopListening(keepSentinelPhase = false)
+        if (::multimodalLiveService.isInitialized) {
+            multimodalLiveService.stopLiveSession(
+                customStatusBn = "রিসেন্ট অ্যাপ থেকে বন্ধ করা হয়েছে"
+            )
+        }
+        CubeSentinelBus.setSentinelActive(false)
+        CubeWakeWordService.stopService(ctx)
+        com.example.service.LiveKeepAliveService.stop(ctx)
+        runCatching { ctx.stopService(android.content.Intent(ctx, com.example.service.UnifiedAudioRouterService::class.java)) }
+        com.example.service.PermanentScreenCaptureService.stopService(ctx)
+        _uiState.value = AgentUiState.Idle
     }
 
     /**
@@ -4003,12 +4036,9 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     fun syncAllMemoriesToGoogleDriveNow() {
         val ctx = getApplication<Application>().applicationContext
         viewModelScope.launch {
-            val notes = historyRepo.memoryNotesFlow.first()
-            val history = historyRepo.historyFlow.first()
-            val msg = com.example.service.GoogleDriveMemorySyncService.syncAllLocalSqliteToDriveNow(
+            val msg = com.example.service.GoogleDriveMemorySyncService.syncAllAppDataToDriveNow(
                 context = ctx,
-                notes = notes,
-                recentHistory = history
+                speakResult = false
             )
             historyRepo.pruneLocalCacheForZeroPhoneStorageImpact()
             _liveArcherReply.value = msg
@@ -4138,6 +4168,7 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
+        shutdownAgentCompletelyOnTaskRemoved()
         super.onCleared()
         musicEngine.stop()
         voiceBridge.release()

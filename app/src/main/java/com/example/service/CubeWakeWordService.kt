@@ -150,7 +150,7 @@ class CubeWakeWordService : Service() {
                 }
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun acquirePartialWakeLock() {
@@ -248,6 +248,14 @@ class CubeWakeWordService : Service() {
             .addAction(0, "Hey Cube ডাকুন", pendingTrigger)
             .addAction(0, "গার্ড বন্ধ করুন", pendingStop)
             .build()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        CubeSentinelBus.setSentinelActive(false)
+        AppTaskRemovedShutdownBus.shutdownEverythingOnTaskRemoved(applicationContext)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

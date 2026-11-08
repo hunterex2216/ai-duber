@@ -500,33 +500,75 @@ fun AgentCommandScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            try {
-                                val client = com.example.service.GoogleDriveMemorySyncService.buildGoogleSignInClient(context)
-                                mainDriveSignInLauncher.launch(client.signInIntent)
-                            } catch (_: Exception) {
-                                com.example.service.GoogleDriveMemorySyncService.connectGmailHybridAccount(
+                    Spacer(modifier = Modifier.width(6.dp))
+                    if (driveSyncState.isConnected) {
+                        Button(
+                            onClick = {
+                                com.example.service.GoogleDriveMemorySyncService.triggerFullSyncFromUi(
                                     context = context,
-                                    email = "mdriyan1678@gmail.com",
                                     onStatusSpoken = onSpeakText
                                 )
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (driveSyncState.isConnected) MatrixGreen else CyberCyan,
-                            contentColor = Color.Black
-                        ),
-                        modifier = Modifier
-                            .height(34.dp)
-                            .testTag("main_connect_google_drive_button")
-                    ) {
-                        Text(
-                            text = if (driveSyncState.isConnected) "✅ 5TB Linked" else "Connect Google Drive",
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CyberCyan,
+                                contentColor = Color.Black
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .testTag("main_sync_all_drive_button")
+                        ) {
+                            Text(
+                                text = if (driveSyncState.isSyncing) "⏳ Sync..." else "🔄 Sync All",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Button(
+                            onClick = {
+                                com.example.service.GoogleDriveMemorySyncService.openOrShareToGoogleDriveApp(
+                                    context = context,
+                                    onStatusSpoken = onSpeakText
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MatrixGreen,
+                                contentColor = Color.Black
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .testTag("main_open_google_drive_app_button")
+                        ) {
+                            Text(
+                                text = "📤 Drive",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(
+                                    context = context,
+                                    onStatusSpoken = onSpeakText
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CyberCyan,
+                                contentColor = Color.Black
+                            ),
+                            modifier = Modifier
+                                .height(34.dp)
+                                .testTag("main_connect_google_drive_button")
+                        ) {
+                            Text(
+                                text = "Connect Google Drive",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
                     }
                 }
 

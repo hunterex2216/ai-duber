@@ -181,7 +181,7 @@ class PermanentScreenCaptureService : Service() {
             setupMediaProjection(resultCode, resultData)
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun setupMediaProjection(resultCode: Int, resultData: Intent) {
@@ -312,6 +312,14 @@ class PermanentScreenCaptureService : Service() {
         } catch (_: Exception) {
         }
         mediaProjection = null
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopScreenProjection()
+        AppTaskRemovedShutdownBus.shutdownEverythingOnTaskRemoved(applicationContext)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
