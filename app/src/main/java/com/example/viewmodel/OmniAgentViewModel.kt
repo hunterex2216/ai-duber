@@ -221,7 +221,9 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun isMainScreenShareActive(): Boolean {
-        return multimodalLiveState.value.isScreenStreamEnabled
+        val cap = com.example.service.ScreenCaptureSessionBus.state.value
+        return multimodalLiveState.value.isScreenStreamEnabled &&
+            (cap.hasMediaProjectionGrant || com.example.service.AccessibilityAutomationBus.state.value.isServiceEnabled)
     }
 
     /** Runs a phone action requested by Gemini Live (function call) and returns a short result string with real-time screen verification. */
@@ -1738,10 +1740,11 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
         if (next && !multimodalLiveState.value.isLiveActive) {
             multimodalLiveService.startLiveSession(_geminiApiKeyState.value)
         }
-        _liveArcherReply.value = if (next) {
-            "মাল্টিমোডাল লাইভ স্ক্রিন ভিশন সচল রয়েছে — আমি প্রতি মিলিসেকেন্ডে স্ক্রিন দেখে সব কাজ করব।"
-        } else {
-            "লাইভ স্ক্রিন ভিশন আপাতত পজ করা হয়েছে।"
+        val hasGrant = com.example.service.ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant
+        _liveArcherReply.value = when {
+            next && hasGrant -> "জি স্যার, মেইন লাইভ স্ক্রিন শেয়ার সচল হয়েছে — এখন আমি সরাসরি আপনার স্ক্রিন দেখে সব কাজ করব।"
+            next -> "জি স্যার, স্ক্রিন শেয়ারের পারমিশন বক্স ওপেন করেছি — Start Now বা Allow ট্যাপ করলেই লাইভ স্ক্রিন শেয়ার চালু হবে।"
+            else -> "জি স্যার, লাইভ স্ক্রিন শেয়ার বন্ধ করা হয়েছে।"
         }
     }
 
@@ -1758,11 +1761,16 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             if (!multimodalLiveState.value.isLiveActive) {
                 multimodalLiveService.startLiveSession(_geminiApiKeyState.value)
             }
-            _liveArcherReply.value = "হাই-স্পিড মাল্টিমোডাল লাইভ স্ক্রিন ভিশন সচল হয়েছে! এখন আমি প্রতি মিলিসেকেন্ডে আপনার স্ক্রিন দেখে সব কাজ করব।"
-        } else {
+            val msg = "জি স্যার, হাই-স্পিড মেইন স্ক্রিন শেয়ার চালু হয়েছে! এখন আমি সরাসরি আপনার স্ক্রিন দেখে কাজ করব।"
+            _liveArcherReply.value = msg
+            voiceBridge.speak(msg)
+        } else if (com.example.service.AccessibilityAutomationBus.state.value.isServiceEnabled) {
             // Keep Accessibility hardware screenshot & UI tree vision active even if MediaProjection dialog was dismissed
             multimodalLiveService.enableScreenStreamNow()
-            _liveArcherReply.value = "মাল্টিমোডাল লাইভ স্ক্রিন ভিশন (Accessibility Hardware Screenshot + UI Tree) সচল রয়েছে স্যার।"
+            _liveArcherReply.value = "জি স্যার, অ্যাক্সেসিবিলিটি হার্ডওয়্যার স্ক্রিনশট ভিশন সচল রয়েছে।"
+        } else {
+            multimodalLiveService.disableScreenStreamNow()
+            _liveArcherReply.value = "স্ক্রিন শেয়ার পারমিশন বাতিল করা হয়েছে। পুনরায় চালু করতে SHARE SCREEN বাটনে ট্যাপ করুন।"
         }
     }
 

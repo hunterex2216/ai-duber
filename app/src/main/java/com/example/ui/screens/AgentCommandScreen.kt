@@ -412,46 +412,31 @@ fun AgentCommandScreen(
                     onOpenSettingsModal = { onOpenModal(JarvisNodeModal.SETTINGS_AND_PERMS) }
                 )
 
-                // 2. Exact Row of 3 White-Framed Chamfered Buttons: LIVE CAMERA | FRONT | SHARE SCREEN
+                // 2. Clean 2-Button Top Action Row: SHARE SCREEN (Direct Live Cast Toggle) | ARGON 4 (Main Coding Studio)
+                val screenCaptureState by com.example.service.ScreenCaptureSessionBus.state.collectAsState()
+                val isScreenShareActiveNow = multimodalLiveState.isScreenStreamEnabled &&
+                    (screenCaptureState.hasMediaProjectionGrant || accessibilityState.isServiceEnabled)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     ArcherBeveledTopButton(
-                        label = "LIVE CAMERA",
-                        icon = Icons.Default.Videocam,
-                        hasDoubleFrame = true,
-                        onClick = { onOpenModal(JarvisNodeModal.LIVE_CAMERA_VISION) },
-                        modifier = Modifier
-                            .weight(1.28f)
-                            .testTag("hud_btn_live_camera")
-                    )
-                    ArcherBeveledTopButton(
-                        label = if (isFrontCameraSelected) "FRONT" else "BACK",
-                        icon = Icons.Default.FlipCameraAndroid,
-                        hasDoubleFrame = false,
-                        onClick = onToggleCameraFacing,
-                        modifier = Modifier
-                            .weight(0.88f)
-                            .testTag("hud_btn_camera_facing")
-                    )
-                    ArcherBeveledTopButton(
-                        label = "SHARE SCREEN",
+                        label = if (isScreenShareActiveNow) "● SCREEN SHARE ON" else "SHARE SCREEN",
                         icon = Icons.Default.LaptopChromebook,
-                        hasDoubleFrame = true,
-                        onClick = { onOpenModal(JarvisNodeModal.LIVE_CAMERA_VISION) },
+                        hasDoubleFrame = isScreenShareActiveNow,
+                        onClick = onToggleLiveScreenStream,
                         modifier = Modifier
-                            .weight(1.15f)
+                            .weight(1f)
                             .testTag("hud_btn_share_screen")
                     )
                     ArcherBeveledTopButton(
-                        label = "ARGON 4",
+                        label = "ARGON 4 STUDIO",
                         icon = Icons.Default.Code,
                         hasDoubleFrame = true,
                         onClick = { onOpenModal(JarvisNodeModal.CODING_AND_ARGON) },
                         modifier = Modifier
-                            .weight(1.02f)
+                            .weight(1f)
                             .testTag("hud_btn_argon_coding")
                     )
                 }

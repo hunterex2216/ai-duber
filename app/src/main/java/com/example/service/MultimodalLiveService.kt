@@ -293,8 +293,10 @@ class MultimodalLiveService(
         SmartMemoryAndSelfUpdateEngine.init(context)
         UnifiedAudioRouterBus.init(context)
         AgentAbilitySwitchesBus.ensureInitialized(context)
-        val permReady = ScreenCaptureSessionBus.syncSavedPreference(context)
-        _state.value = _state.value.copy(isScreenStreamEnabled = permReady)
+        ScreenCaptureSessionBus.syncSavedPreference(context)
+        val isActuallyCapturing = ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant &&
+            ScreenCaptureSessionBus.state.value.isCapturingFrames
+        _state.value = _state.value.copy(isScreenStreamEnabled = isActuallyCapturing)
         refreshExportConfig(customApiKey = "")
     }
 
@@ -814,8 +816,11 @@ class MultimodalLiveService(
         setupDone = false
         refreshExportConfig(customApiKey)
         ScreenMemory.load(context)
+        val screenActive = _state.value.isScreenStreamEnabled ||
+            (ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant &&
+                ScreenCaptureSessionBus.state.value.isCapturingFrames)
         _state.value = _state.value.copy(
-            isScreenStreamEnabled = true,
+            isScreenStreamEnabled = screenActive,
             isLiveActive = true,
             isMicMuted = false,
             connectionStatusLabel = "CONNECTING • GEMINI LIVE",
@@ -922,20 +927,27 @@ class MultimodalLiveService(
     }
 
     fun disableScreenStreamNow() {
+        PermanentScreenCaptureService.stopService(context)
         _state.value = _state.value.copy(
             isScreenStreamEnabled = false,
-            statusMessageBn = "লাইভ স্ক্রিন ভিশন আপাতত পজ করা হয়েছে"
+            statusMessageBn = "লাইভ স্ক্রিন শেয়ার বন্ধ করা হয়েছে"
         )
     }
 
     fun toggleScreenStream(): Boolean {
-        val next = !_state.value.isScreenStreamEnabled
-        _state.value = _state.value.copy(
-            isScreenStreamEnabled = next,
-            statusMessageBn = if (next) "মাল্টিমোডাল লাইভ স্ক্রিন ভিশন সচল রয়েছে" else "লাইভ স্ক্রিন ভিশন পজ করা হয়েছে"
-        )
+        val hasActiveProjection = ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant &&
+            ScreenCaptureSessionBus.state.value.isCapturingFrames
+        val next = if (!_state.value.isScreenStreamEnabled || !hasActiveProjection) {
+            true
+        } else {
+            false
+        }
         if (next) {
-            if (!ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant) {
+            _state.value = _state.value.copy(
+                isScreenStreamEnabled = true,
+                statusMessageBn = "মাল্টিমোডাল লাইভ স্ক্রিন শেয়ার সচল হচ্ছে..."
+            )
+            if (!hasActiveProjection) {
                 ScreenCaptureSessionBus.requestOneTimeScreenCapturePermission()
             }
             ScreenCaptureSessionBus.captureBestAvailableScreenFrame { bmp ->
@@ -945,6 +957,8 @@ class MultimodalLiveService(
                     sendRealtimeImageFrameOverWs(bmp)
                 }
             }
+        } else {
+            disableScreenStreamNow()
         }
         return next
     }
@@ -1777,7 +1791,7 @@ class MultimodalLiveService(
         val ws = activeWebSocket ?: return
         if (!setupDone) return
         try {
-            if (_state.value.isScreenStreamEnabled && ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant) {
+            if (_state.value.isScreenStreamEnabled) {
                 ScreenCaptureSessionBus.captureBestAvailableScreenFrame { bmp ->
                     latestScreenBitmap = bmp
                     sendRealtimeImageFrameOverWs(bmp)

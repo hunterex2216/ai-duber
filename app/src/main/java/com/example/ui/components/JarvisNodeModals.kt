@@ -4,6 +4,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -2795,85 +2798,91 @@ fun CodingAndArgonWorkspaceSheet(
     onShareArtifact: (SavedArcherArtifact) -> Unit,
     onClose: () -> Unit
 ) {
+    val context = LocalContext.current
+    val activeSession by com.example.service.CodingSessionBus.session.collectAsState()
+
+    var activeStudioTab by rememberSaveable { mutableStateOf("EDITOR") }
+    var isRawEditMode by rememberSaveable { mutableStateOf(false) }
     var codingPrompt by rememberSaveable { mutableStateOf("") }
-    var projectTitle by rememberSaveable(workspaceState.currentProjectTitle) {
-        mutableStateOf(workspaceState.currentProjectTitle.ifBlank { "archer_app" })
-    }
-    var fileName by rememberSaveable(workspaceState.currentFileName) {
-        mutableStateOf(workspaceState.currentFileName.ifBlank { "index.html" })
-    }
-    var language by rememberSaveable(workspaceState.currentLanguage) {
-        mutableStateOf(workspaceState.currentLanguage.ifBlank { "HTML/JS" })
-    }
-    var codeEditorText by rememberSaveable(workspaceState.currentCode) {
+
+    var projectTitle by rememberSaveable(workspaceState.currentProjectTitle, activeSession?.title) {
         mutableStateOf(
-            workspaceState.currentCode.ifBlank {
-                "# ARCHER AI • Coding Studio\nprint('Hello Boss! Saved cleanly inside Download/archer/ folder.')"
-            }
+            activeSession?.title?.takeIf { it.isNotBlank() }
+                ?: workspaceState.currentProjectTitle.ifBlank { "archer_app" }
+        )
+    }
+    var fileName by rememberSaveable(workspaceState.currentFileName, activeSession?.fileName) {
+        mutableStateOf(
+            activeSession?.fileName?.takeIf { it.isNotBlank() }
+                ?: workspaceState.currentFileName.ifBlank { "index.html" }
+        )
+    }
+    var language by rememberSaveable(workspaceState.currentLanguage, activeSession?.language) {
+        mutableStateOf(
+            activeSession?.language?.takeIf { it.isNotBlank() }
+                ?: workspaceState.currentLanguage.ifBlank { "HTML/JS" }
+        )
+    }
+    var codeEditorText by rememberSaveable(workspaceState.currentCode, activeSession?.code) {
+        mutableStateOf(
+            activeSession?.code?.takeIf { it.isNotBlank() }
+                ?: workspaceState.currentCode.ifBlank {
+                    """
+                    <!DOCTYPE html>
+                    <html>
+                    <head><title>Argon 4 Studio App</title></head>
+                    <body>
+                      <h1>Argon 4 Main Coding Studio</h1>
+                      <p>ভয়েস বা টেক্সট দিয়ে যেকোনো ওয়েব অ্যাপ, পাইথন স্ক্রিপ্ট বা কোড তৈরি ও লাইভ প্রিভিউ করুন।</p>
+                      <button>Run Action</button>
+                    </body>
+                    </html>
+                    """.trimIndent()
+                }
         )
     }
 
+    val selectedExt = remember(fileName) {
+        fileName.substringAfterLast('.', "html").lowercase()
+    }
+    val lineCount = remember(codeEditorText) {
+        codeEditorText.count { it == '\n' } + 1
+    }
+
     PremiumModalShell(
-        badgeText = "ARCHER AI • CODING STUDIO & SINGLE-FILE ARCHIVER",
-        title = "কোডিং স্টুডিও ও 'Download/archer/' ফাইল ম্যানেজার",
-        subtitle = "সক্রিয় মডেল: ${workspaceState.activeModelId} • সংরক্ষিত ফাইল: ${workspaceState.savedArtifacts.size}টি",
+        badgeText = "ARGON 4 • MAIN CODING STUDIO (MINI AI IDE)",
+        title = "Argon 4 মেইন কোডিং স্টুডিও ও লাইভ প্রিভিউ",
+        subtitle = "সক্রিয় মডেল: ${workspaceState.activeModelId.removePrefix("models/")} • ফাইল: $fileName ($lineCount লাইন)",
         accentColor = OfficialSkyBlue,
         secondaryAccent = OfficialEmerald,
         onClose = onClose
     ) {
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 24.dp)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 1. Open Full-Screen Mini AI IDE Button + Model Selector
-            item {
-                PremiumSectionCard(
-                    title = "💻 ডেডিকেটেড কোডিং স্টুডিও (Mini AI IDE + Live WebView)",
-                    subtitle = "ফুল-স্ক্রিন কোড এডিটর, লাইভ ওয়েবভিউ প্রিভিউ এবং ভয়েস কোড ফিক্সার ওপেন করুন",
-                    icon = Icons.Default.Code,
-                    accentColor = OfficialSkyBlue,
-                    headerTrailing = {
-                        Switch(
-                            checked = workspaceState.isAutoModelRouting,
-                            onCheckedChange = { onToggleAutoRouting() },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = OfficialSlateBg,
-                                checkedTrackColor = OfficialSkyBlue
-                            ),
-                            modifier = Modifier.testTag("argon_auto_routing_switch")
-                        )
-                    }
+            // 1. Model Selector + Auto-Routing Bar
+            Surface(
+                color = OfficialSlateCard,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, OfficialSlateBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    PremiumActionButton(
-                        text = "▶ ফুল-স্ক্রিন কোডিং স্টুডিও ও লাইভ প্রিভিউ খুলুন",
-                        icon = Icons.Default.PlayArrow,
-                        primaryColor = OfficialSkyBlue,
-                        onClick = {
-                            com.example.service.CodingSessionBus.start(
-                                com.example.service.CodingSession(
-                                    id = "code_${System.currentTimeMillis()}",
-                                    title = projectTitle,
-                                    fileName = fileName,
-                                    language = language,
-                                    code = codeEditorText,
-                                    activeTab = "EDITOR",
-                                    statusMessageBn = "কোডিং স্টুডিও প্রস্তুত — ভয়েসে যেকোনো পরিবর্তন বলুন বা ▶ Live Preview ট্যাবে রান করুন।"
-                                )
-                            )
-                            onClose()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
                     ) {
                         listOf(
-                            "models/gemini-2.5-pro" to "⚡ Gemini 2.5 Pro (Coding)",
-                            "models/gemini-2.5-flash" to "🚀 Gemini 2.5 Flash"
+                            "models/gemini-2.5-pro" to "⚡ Argon 4 Pro",
+                            "models/gemini-2.5-flash" to "🚀 Flash 2.5"
                         ).forEach { (id, label) ->
                             val selected = workspaceState.activeModelId == id
                             FilterChip(
@@ -2882,6 +2891,7 @@ fun CodingAndArgonWorkspaceSheet(
                                 label = {
                                     Text(
                                         text = label,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (selected) OfficialSlateBg else OfficialTextPrimary
                                     )
@@ -2894,18 +2904,339 @@ fun CodingAndArgonWorkspaceSheet(
                             )
                         }
                     }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "অটো",
+                            color = OfficialTextSecondary,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Switch(
+                            checked = workspaceState.isAutoModelRouting,
+                            onCheckedChange = { onToggleAutoRouting() },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = OfficialSlateBg,
+                                checkedTrackColor = OfficialSkyBlue
+                            ),
+                            modifier = Modifier.testTag("argon_auto_routing_switch")
+                        )
+                    }
                 }
             }
 
-            // 2. Ask AI to Write Code
-            item {
-                PremiumSectionCard(
-                    title = "✨ ভয়েস বা টেক্সট দিয়ে নতুন অ্যাপ / স্ক্রিপ্ট তৈরি করুন",
-                    subtitle = "ডুপ্লিকেট .zip বা .txt ছাড়া শুধুমাত্র ১টি সঠিক ফরম্যাটে (.html, .py, .js, .kt, .json) সেভ হবে",
-                    icon = Icons.Default.AutoAwesome,
-                    accentColor = OfficialSkyBlue,
-                    badgeText = "CLEAN 1-FILE"
-                ) {
+            // 2. Unified 3-Tab Studio Switcher: 💻 Code Editor | ▶ Live Preview / Run | 📂 Saved Files
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val tabs = listOf(
+                    Triple("EDITOR", "💻 Code Editor", OfficialSkyBlue),
+                    Triple("PREVIEW", "▶ Live Preview", OfficialEmerald),
+                    Triple("FILES", "📂 ফাইল (${workspaceState.savedArtifacts.size})", OfficialSkyBlue)
+                )
+                tabs.forEach { (tabId, tabLabel, activeColor) ->
+                    val isSelected = activeStudioTab == tabId
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isSelected) activeColor else OfficialSlateInner)
+                            .border(
+                                1.dp,
+                                if (isSelected) activeColor else OfficialSlateBorder,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .clickable { activeStudioTab = tabId }
+                            .testTag("argon_studio_tab_${tabId.lowercase()}")
+                    ) {
+                        Text(
+                            text = tabLabel,
+                            color = if (isSelected) OfficialSlateBg else OfficialTextPrimary,
+                            fontSize = 11.2.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            // 3. Main Tab Content Area
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(320.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(OfficialSlateInner)
+                    .border(1.dp, OfficialSlateBorder, RoundedCornerShape(14.dp))
+            ) {
+                when (activeStudioTab) {
+                    "EDITOR" -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // File metadata + Edit/Syntax toggle + Single-file extension chips
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = projectTitle,
+                                    onValueChange = { projectTitle = it },
+                                    label = { Text("প্রজেক্ট", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = premiumTextFieldColors(OfficialSkyBlue),
+                                    modifier = Modifier.weight(0.9f)
+                                )
+                                OutlinedTextField(
+                                    value = fileName,
+                                    onValueChange = { fileName = it },
+                                    label = { Text("ফাইল নাম", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = premiumTextFieldColors(OfficialSkyBlue),
+                                    modifier = Modifier.weight(1.1f)
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isRawEditMode) OfficialSkyBlue else OfficialSlateCard,
+                                    border = BorderStroke(1.dp, OfficialSkyBlue),
+                                    modifier = Modifier
+                                        .clickable { isRawEditMode = !isRawEditMode }
+                                        .testTag("argon_toggle_raw_edit_btn")
+                                ) {
+                                    Text(
+                                        text = if (isRawEditMode) "👁️ Syntax" else "✏️ Edit",
+                                        color = if (isRawEditMode) OfficialSlateBg else OfficialSkyBlue,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp)
+                                    )
+                                }
+                            }
+
+                            // Format selector chips (.html, .py, .js, .kt, .json, .txt)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Format:",
+                                    color = OfficialTextSecondary,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                listOf(
+                                    "html" to "HTML/JS",
+                                    "py" to "Python",
+                                    "js" to "JavaScript",
+                                    "kt" to "Kotlin",
+                                    "json" to "JSON",
+                                    "txt" to "Text"
+                                ).forEach { (ext, langLabel) ->
+                                    val isCurrentExt = selectedExt == ext
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isCurrentExt) OfficialSkyBlue else OfficialSlateCard,
+                                        border = BorderStroke(1.dp, if (isCurrentExt) OfficialSkyBlue else OfficialSlateBorder),
+                                        modifier = Modifier
+                                            .clickable {
+                                                val base = fileName.substringBeforeLast('.', projectTitle.ifBlank { "archer_app" })
+                                                fileName = "$base.$ext"
+                                                language = langLabel
+                                            }
+                                            .testTag("argon_ext_chip_$ext")
+                                    ) {
+                                        Text(
+                                            text = ".$ext",
+                                            color = if (isCurrentExt) OfficialSlateBg else OfficialTextPrimary,
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (isRawEditMode) {
+                                OutlinedTextField(
+                                    value = codeEditorText,
+                                    onValueChange = { codeEditorText = it },
+                                    label = { Text("কোড এডিটর ($language)") },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = premiumTextFieldColors(OfficialSkyBlue),
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .testTag("argon_code_editor_field")
+                                )
+                            } else {
+                                // Syntax-Highlighted Code View with Line Numbers
+                                val vScroll = rememberScrollState()
+                                val hScroll = rememberScrollState()
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFF070B12))
+                                        .border(1.dp, OfficialSlateBorder, RoundedCornerShape(10.dp))
+                                        .verticalScroll(vScroll)
+                                        .padding(vertical = 8.dp)
+                                        .clickable { isRawEditMode = true }
+                                        .testTag("argon_code_editor_field")
+                                ) {
+                                    val lineNumbers = remember(lineCount) {
+                                        (1..lineCount).joinToString("\n")
+                                    }
+                                    Text(
+                                        text = lineNumbers,
+                                        color = Color(0xFF475569),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.5.sp,
+                                        lineHeight = 17.sp,
+                                        modifier = Modifier.padding(start = 8.dp, end = 8.dp)
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .width(1.dp)
+                                            .height((lineCount * 17).coerceAtLeast(180).dp)
+                                            .background(OfficialSlateBorder.copy(alpha = 0.6f))
+                                    )
+                                    Text(
+                                        text = highlightCodeSyntax(codeEditorText),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.5.sp,
+                                        lineHeight = 17.sp,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .horizontalScroll(hScroll)
+                                            .padding(horizontal = 10.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    "PREVIEW" -> {
+                        NativeComposeSandboxedPreview(
+                            code = codeEditorText,
+                            fileName = fileName,
+                            language = language
+                        )
+                    }
+
+                    "FILES" -> {
+                        if (workspaceState.savedArtifacts.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Download/archer/ ফোল্ডারে এখনো কোনো ফাইল সেভ করা হয়নি।",
+                                    color = OfficialTextSecondary,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(workspaceState.savedArtifacts, key = { it.id }) { artifact ->
+                                    Surface(
+                                        color = OfficialSlateCard,
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = BorderStroke(1.dp, OfficialSlateBorder),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "📄 ${artifact.primaryFileName}",
+                                                    color = OfficialTextPrimary,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    fontSize = 12.5.sp,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    PremiumActionButton(
+                                                        text = "💻 এডিট",
+                                                        primaryColor = OfficialSkyBlue,
+                                                        onClick = {
+                                                            projectTitle = artifact.projectTitle
+                                                            fileName = artifact.primaryFileName
+                                                            language = artifact.language
+                                                            codeEditorText = artifact.codeContent
+                                                            activeStudioTab = "EDITOR"
+                                                        }
+                                                    )
+                                                    PremiumActionButton(
+                                                        text = "▶ রান",
+                                                        primaryColor = OfficialEmerald,
+                                                        onClick = {
+                                                            projectTitle = artifact.projectTitle
+                                                            fileName = artifact.primaryFileName
+                                                            language = artifact.language
+                                                            codeEditorText = artifact.codeContent
+                                                            activeStudioTab = "PREVIEW"
+                                                        }
+                                                    )
+                                                    PremiumActionButton(
+                                                        text = "শেয়ার",
+                                                        icon = Icons.Default.Share,
+                                                        primaryColor = OfficialSkyBlue,
+                                                        isOutlined = true,
+                                                        onClick = { onShareArtifact(artifact) }
+                                                    )
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "ভাষা: ${artifact.language} • পাথ: ${artifact.singleFilePath}",
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 10.sp,
+                                                color = OfficialTextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. AI Code Generator & Live Voice/Text Patching Bar
+            Surface(
+                color = OfficialSlateCard,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, OfficialSlateBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text(
+                        text = "✨ Argon 4 AI কোড জেনারেটর ও লাইভ কোড ফিক্সার",
+                        color = OfficialSkyBlue,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -2915,13 +3246,13 @@ fun CodingAndArgonWorkspaceSheet(
                             onValueChange = { codingPrompt = it },
                             placeholder = {
                                 Text(
-                                    text = "যেমন: একটি আধুনিক ক্যালকুলেটর ওয়েব অ্যাপ তৈরি করো...",
+                                    text = "নতুন অ্যাপ তৈরি বা কোড পরিবর্তন লিখুন (যেমন: ক্যালকুলেটর অ্যাপ বানিয়ে দাও)...",
                                     color = OfficialTextSecondary,
-                                    fontSize = 12.sp
+                                    fontSize = 11.sp
                                 )
                             },
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
                             colors = premiumTextFieldColors(OfficialSkyBlue),
                             modifier = Modifier
                                 .weight(1f)
@@ -2931,10 +3262,10 @@ fun CodingAndArgonWorkspaceSheet(
                             text = "কোড তৈরি",
                             primaryColor = OfficialSkyBlue,
                             onClick = {
-                                if (codingPrompt.isNotBlank()) {
-                                    onGenerateCodeWithAi("কোড লিখে কোডিং স্টুডিওতে দেখাও: $codingPrompt")
+                                val clean = codingPrompt.trim()
+                                if (clean.isNotBlank()) {
+                                    onGenerateCodeWithAi("কোড লিখে কোডিং স্টুডিওতে দেখাও: $clean")
                                     codingPrompt = ""
-                                    onClose()
                                 }
                             },
                             testTag = "argon_generate_code_btn"
@@ -2943,132 +3274,73 @@ fun CodingAndArgonWorkspaceSheet(
                 }
             }
 
-            // 3. Direct Single-File Editor & Saver
-            item {
-                PremiumSectionCard(
-                    title = "💾 সরাসরি কোড এডিটর ও সিঙ্গেল-ফাইল সেভার",
-                    subtitle = "Download/archer/ ফোল্ডারে শুধুমাত্র ১টি ক্লিন ফাইল হিসেবে সংরক্ষণ",
-                    icon = Icons.Default.Code,
-                    accentColor = OfficialEmerald,
-                    badgeText = "SINGLE FILE"
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = projectTitle,
-                            onValueChange = { projectTitle = it },
-                            label = { Text("প্রজেক্ট নাম") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            colors = premiumTextFieldColors(OfficialSkyBlue),
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = fileName,
-                            onValueChange = { fileName = it },
-                            label = { Text("ফাইল (index.html / main.py)") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            colors = premiumTextFieldColors(OfficialSkyBlue),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = codeEditorText,
-                        onValueChange = { codeEditorText = it },
-                        label = { Text("কোড কন্টেন্ট ($language)") },
-                        minLines = 4,
-                        maxLines = 7,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = premiumTextFieldColors(OfficialSkyBlue),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("argon_code_editor_field")
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    PremiumActionButton(
-                        text = "💾 কোডিং স্টুডিওতে ওপেন ও সেভ করুন",
-                        primaryColor = OfficialEmerald,
-                        onClick = {
-                            onSaveManualCodeToArcher(projectTitle, fileName, language, codeEditorText)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        testTag = "save_to_archer_folder_btn"
-                    )
-                }
+            // 5. Bottom One-Click Actions: Copy | ▶ Live Preview | 💾 Save Single File | ☁️ 5TB Drive
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PremiumActionButton(
+                    text = "Copy Code",
+                    primaryColor = OfficialSkyBlue,
+                    isOutlined = true,
+                    onClick = {
+                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        cm?.setPrimaryClip(android.content.ClipData.newPlainText(fileName, codeEditorText))
+                        android.widget.Toast.makeText(context, "✔ কোড ক্লিপবোর্ডে কপি হয়েছে!", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                PremiumActionButton(
+                    text = if (activeStudioTab == "PREVIEW") "💻 Code Editor" else "▶ Live Preview",
+                    icon = Icons.Default.PlayArrow,
+                    primaryColor = OfficialEmerald,
+                    onClick = {
+                        activeStudioTab = if (activeStudioTab == "PREVIEW") "EDITOR" else "PREVIEW"
+                    },
+                    modifier = Modifier.weight(1f)
+                )
             }
 
-            // 4. Saved Single Files List
-            if (workspaceState.savedArtifacts.isNotEmpty()) {
-                item {
-                    Text(
-                        text = "📂 Download/archer/ ফোল্ডারে সংরক্ষিত ফাইল (${workspaceState.savedArtifacts.size}):",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = OfficialSkyBlue,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
-
-                items(workspaceState.savedArtifacts, key = { it.id }) { artifact ->
-                    Surface(
-                        color = OfficialSlateCard,
-                        shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, OfficialSlateBorder),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "📄 ${artifact.primaryFileName}",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = OfficialTextPrimary,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    PremiumActionButton(
-                                        text = "▶ ওপেন",
-                                        primaryColor = OfficialSkyBlue,
-                                        onClick = {
-                                            com.example.service.CodingSessionBus.start(
-                                                com.example.service.CodingSession(
-                                                    id = artifact.id,
-                                                    title = artifact.projectTitle,
-                                                    fileName = artifact.primaryFileName,
-                                                    language = artifact.language,
-                                                    code = artifact.codeContent,
-                                                    savedPath = artifact.singleFilePath,
-                                                    isSaved = true,
-                                                    pendingSaveConfirmation = false,
-                                                    activeTab = if (artifact.primaryFileName.endsWith(".html", true)) "PREVIEW" else "EDITOR"
-                                                )
-                                            )
-                                            onClose()
-                                        }
-                                    )
-                                    PremiumActionButton(
-                                        text = "শেয়ার",
-                                        icon = Icons.Default.Share,
-                                        primaryColor = OfficialSkyBlue,
-                                        isOutlined = true,
-                                        onClick = { onShareArtifact(artifact) }
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "ভাষা: ${artifact.language} • পাথ: ${artifact.singleFilePath}",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.5.sp,
-                                color = OfficialTextSecondary
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PremiumActionButton(
+                    text = "💾 Save (Download/archer/)",
+                    primaryColor = OfficialSkyBlue,
+                    onClick = {
+                        onSaveManualCodeToArcher(projectTitle, fileName, language, codeEditorText)
+                        android.widget.Toast.makeText(
+                            context,
+                            "✔ সিঙ্গেল ফাইল '$fileName' Download/archer/ ফোল্ডারে সেভ হয়েছে!",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    modifier = Modifier.weight(1f),
+                    testTag = "save_to_archer_folder_btn"
+                )
+                PremiumActionButton(
+                    text = "☁️ 5TB Drive Sync",
+                    primaryColor = OfficialEmerald,
+                    isOutlined = true,
+                    onClick = {
+                        onSaveManualCodeToArcher(projectTitle, fileName, language, codeEditorText)
+                        com.example.service.CodingSessionBus.start(
+                            com.example.service.CodingSession(
+                                id = "code_${System.currentTimeMillis()}",
+                                title = projectTitle,
+                                fileName = fileName,
+                                language = language,
+                                code = codeEditorText,
+                                isSaved = true,
+                                pendingSaveConfirmation = false,
+                                activeTab = activeStudioTab
                             )
-                        }
-                    }
-                }
+                        )
+                        com.example.service.CodingSessionBus.requestSyncToDrive()
+                    },
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
@@ -3084,97 +3356,107 @@ fun LiveCameraAndScreenVisionSheet(
     onSendVisionPrompt: (String) -> Unit,
     onClose: () -> Unit
 ) {
-    var visionQuestion by rememberSaveable { mutableStateOf("স্ক্রিনে বা ক্যামেরায় কি দেখা যাচ্ছে বিশ্লেষণ করে বলো") }
-    val isMainScreenShareActive = com.example.service.ScreenCaptureSessionBus.isPermanentlyReady()
+    var visionQuestion by rememberSaveable { mutableStateOf("বর্তমান স্ক্রিনে কী দেখা যাচ্ছে বিশ্লেষণ করে বলো") }
+    val screenCaptureState by com.example.service.ScreenCaptureSessionBus.state.collectAsState()
+    val isMainScreenShareActive = screenCaptureState.hasMediaProjectionGrant && screenCaptureState.isCapturingFrames
 
     PremiumModalShell(
-        badgeText = "VISION AI • MAIN SCREEN SHARE & CAMERA",
-        title = "লাইভ মেইন স্ক্রিন শেয়ার ও ক্যামেরা ভিশন স্টুডিও",
+        badgeText = "SCREEN VISION • REAL-TIME MAIN SCREEN SHARE",
+        title = "লাইভ মেইন স্ক্রিন শেয়ার ও ভিশন কন্ট্রোল",
         subtitle = if (isMainScreenShareActive) {
-            "মেইন স্ক্রিন শেয়ার সক্রিয় আছে • এজেন্ট রিয়েল-টাইমে স্ক্রিন দেখছে"
+            "মেইন স্ক্রিন শেয়ার সচল আছে (ফ্রেম #${screenCaptureState.capturedFrameCount}) • এজেন্ট সরাসরি স্ক্রিন দেখছে"
         } else {
-            "স্ক্রিন দেখার জন্য নিচের 'মেইন স্ক্রিন শেয়ার' বাটনে ট্যাপ করে অ্যাক্টিভ করুন"
+            "স্ক্রিন দেখার জন্য নিচের 'মেইন স্ক্রিন শেয়ার চালু করুন' বাটনে ট্যাপ করুন"
         },
-        accentColor = MatrixGreen,
-        secondaryAccent = CyberCyan,
+        accentColor = OfficialSkyBlue,
+        secondaryAccent = OfficialEmerald,
         onClose = onClose
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             PremiumSectionCard(
-                title = if (isMainScreenShareActive) "● MAIN SCREEN SHARE ACTIVE" else "মেইন স্ক্রিন শেয়ার ও ক্যামেরা স্ট্যাটাস",
-                subtitle = if (isFrontCamera) "FRONT LENS • ফ্রন্ট ক্যামেরা ও মেইন স্ক্রিন ভিশন" else "REAR LENS • ব্যাক ক্যামেরা ও মেইন স্ক্রিন ভিশন",
+                title = if (isMainScreenShareActive) "● MAIN SCREEN SHARE ACTIVE" else "মেইন স্ক্রিন শেয়ার স্ট্যাটাস",
+                subtitle = screenCaptureState.statusBn,
                 icon = Icons.Default.ScreenShare,
-                accentColor = if (isMainScreenShareActive) MatrixGreen else CircuitOrange,
-                badgeText = if (isMainScreenShareActive) "LIVE CAST" else "OFF"
+                accentColor = if (isMainScreenShareActive) OfficialEmerald else OfficialSkyBlue,
+                badgeText = if (isMainScreenShareActive) "LIVE CAST" else "STANDBY"
             ) {
                 Text(
                     text = if (isMainScreenShareActive) {
                         "মেইন স্ক্রিন শেয়ার চালু আছে। আপনি এখন যেকোনো অ্যাপে ঢুকে এজেন্টকে কাজ করতে বলতে পারেন।"
                     } else {
-                        "স্ক্রিন শেয়ার বন্ধ থাকা অবস্থায় এজেন্ট কখনোই স্ক্রিন চেক করবে না। স্ক্রিনের কাজ করাতে মেইন স্ক্রিন শেয়ার চালু করুন।"
+                        "নিচের বাটনে ট্যাপ করলে অ্যান্ড্রয়েড স্ক্রিন শেয়ার পারমিশন বক্স (Start now / Allow) আসবে। একবার Allow করলেই লাইভ স্ক্রিন শেয়ার চালু হবে।"
                     },
-                    color = Color(0xFFD6F7EE),
+                    color = OfficialTextPrimary,
                     fontSize = 11.5.sp,
                     lineHeight = 16.sp
                 )
+
+                if (visibleScreenText.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = OfficialSlateInner,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, OfficialSlateBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "স্ক্রিন টেক্সট প্রিভিউ: ${visibleScreenText.take(220)}",
+                            color = OfficialTextSecondary,
+                            fontSize = 10.5.sp,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PremiumActionButton(
-                        text = "মেইন স্ক্রিন শেয়ার",
+                        text = if (isMainScreenShareActive) "স্ক্রিন শেয়ার রিস্টার্ট করুন" else "মেইন স্ক্রিন শেয়ার চালু করুন",
                         icon = Icons.Default.ScreenShare,
-                        primaryColor = MatrixGreen,
-                        secondaryColor = CyberCyan,
+                        primaryColor = OfficialEmerald,
                         onClick = {
                             com.example.service.ScreenCaptureSessionBus.requestOneTimeScreenCapturePermission()
                             onClose()
                         },
-                        modifier = Modifier.weight(1.2f)
+                        modifier = Modifier.weight(1f)
                     )
-
-                    PremiumActionButton(
-                        text = "ক্যামেরা",
-                        icon = Icons.Default.CameraAlt,
-                        primaryColor = CyberCyan,
-                        secondaryColor = MatrixGreen,
-                        onClick = onLaunchSystemCamera,
-                        modifier = Modifier.weight(0.95f)
-                    )
-
-                    PremiumActionButton(
-                        text = if (isFrontCamera) "ব্যাক" else "ফ্রন্ট",
-                        icon = Icons.Default.FlipCameraAndroid,
-                        primaryColor = CyberCyan,
-                        secondaryColor = RoyalViolet,
-                        isOutlined = true,
-                        onClick = onFlipCamera,
-                        modifier = Modifier.weight(0.85f)
-                    )
+                    if (isMainScreenShareActive) {
+                        val ctx = LocalContext.current
+                        PremiumActionButton(
+                            text = "স্ক্রিন শেয়ার বন্ধ করুন",
+                            primaryColor = OfficialDangerRed,
+                            isOutlined = true,
+                            onClick = {
+                                com.example.service.PermanentScreenCaptureService.stopService(ctx)
+                                onClose()
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
 
             PremiumSectionCard(
-                title = "ভিশন বা মেইন স্ক্রিন সম্পর্কে প্রশ্ন করুন",
+                title = "মেইন স্ক্রিন সম্পর্কে এআই-কে প্রশ্ন করুন",
                 subtitle = "স্ক্রিনে যা দেখা যাচ্ছে তার ওপর ভিত্তি করে এআই বিশ্লেষণ করবে",
-                icon = Icons.Default.CameraAlt,
-                accentColor = CyberCyan
+                icon = Icons.Default.ScreenShare,
+                accentColor = OfficialSkyBlue
             ) {
                 OutlinedTextField(
                     value = visionQuestion,
                     onValueChange = { visionQuestion = it },
                     label = { Text("আপনার প্রশ্ন লিখুন") },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = premiumTextFieldColors(CyberCyan),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = premiumTextFieldColors(OfficialSkyBlue),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
                 PremiumActionButton(
-                    text = "⚡ এআই দিয়ে মেইন স্ক্রিন ও ভিশন বিশ্লেষণ করুন",
-                    primaryColor = CyberCyan,
-                    secondaryColor = MatrixGreen,
+                    text = "⚡ এআই দিয়ে মেইন স্ক্রিন বিশ্লেষণ করুন",
+                    primaryColor = OfficialSkyBlue,
                     onClick = {
                         onSendVisionPrompt(visionQuestion)
                         onClose()

@@ -94,13 +94,21 @@ object AccessibilityAutomationBus {
 
     fun requestLiveScreenFrame(onBitmapReady: (Bitmap) -> Unit) {
         val projectedBmp = ScreenCaptureSessionBus.latestCapturedBitmap
-        if (ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant && projectedBmp != null && !projectedBmp.isRecycled) {
+        if (ScreenCaptureSessionBus.state.value.hasMediaProjectionGrant &&
+            ScreenCaptureSessionBus.state.value.isCapturingFrames &&
+            projectedBmp != null &&
+            !projectedBmp.isRecycled
+        ) {
             onBitmapReady(projectedBmp)
             return
         }
         val svc = serviceInstance
         if (svc != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             svc.captureHardwareScreenshotOrFallback(onBitmapReady)
+        } else if (projectedBmp != null && !projectedBmp.isRecycled) {
+            onBitmapReady(projectedBmp)
+        } else {
+            onBitmapReady(renderLiveScreenMatrixBitmap())
         }
     }
 
@@ -547,10 +555,14 @@ class CubeAccessibilityService : AccessibilityService() {
     }
 
     fun captureHardwareScreenshotOrFallback(onBitmapReady: (Bitmap) -> Unit) {
-        // Android rate-limits takeScreenshot to ~1/sec: always reuse the last REAL screenshot (never send a fake text-drawn bitmap!)
         val nowMs = android.os.SystemClock.uptimeMillis()
         if (nowMs - lastShotAt < 750L) {
-            lastRealShot?.let { if (!it.isRecycled) onBitmapReady(it) }
+            val cached = lastRealShot
+            if (cached != null && !cached.isRecycled) {
+                onBitmapReady(cached)
+            } else {
+                onBitmapReady(AccessibilityAutomationBus.renderLiveScreenMatrixBitmap())
+            }
             return
         }
         lastShotAt = nowMs
@@ -572,23 +584,33 @@ class CubeAccessibilityService : AccessibilityService() {
                                     lastRealShot = softBmp
                                     onBitmapReady(softBmp)
                                 } else {
-                                    lastRealShot?.let { if (!it.isRecycled) onBitmapReady(it) }
+                                    val fallback = lastRealShot?.takeIf { !it.isRecycled }
+                                        ?: AccessibilityAutomationBus.renderLiveScreenMatrixBitmap()
+                                    onBitmapReady(fallback)
                                 }
                             } catch (_: Exception) {
-                                lastRealShot?.let { if (!it.isRecycled) onBitmapReady(it) }
+                                val fallback = lastRealShot?.takeIf { !it.isRecycled }
+                                    ?: AccessibilityAutomationBus.renderLiveScreenMatrixBitmap()
+                                onBitmapReady(fallback)
                             }
                         }
 
                         override fun onFailure(errorCode: Int) {
-                            lastRealShot?.let { if (!it.isRecycled) onBitmapReady(it) }
+                            val fallback = lastRealShot?.takeIf { !it.isRecycled }
+                                ?: AccessibilityAutomationBus.renderLiveScreenMatrixBitmap()
+                            onBitmapReady(fallback)
                         }
                     }
                 )
             } catch (_: Exception) {
-                lastRealShot?.let { if (!it.isRecycled) onBitmapReady(it) }
+                val fallback = lastRealShot?.takeIf { !it.isRecycled }
+                    ?: AccessibilityAutomationBus.renderLiveScreenMatrixBitmap()
+                onBitmapReady(fallback)
             }
         } else {
-            lastRealShot?.let { if (!it.isRecycled) onBitmapReady(it) }
+            val fallback = lastRealShot?.takeIf { !it.isRecycled }
+                ?: AccessibilityAutomationBus.renderLiveScreenMatrixBitmap()
+            onBitmapReady(fallback)
         }
     }
 

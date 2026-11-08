@@ -80,15 +80,19 @@ object ScreenCaptureSessionBus {
         _permissionRequestEvents.tryEmit(System.currentTimeMillis())
     }
 
-    fun onFrameCaptured(bitmap: Bitmap) {
+    fun onFrameCaptured(bitmap: Bitmap, fromMediaProjection: Boolean = true) {
         latestCapturedBitmap = bitmap
         _latestBitmapFlow.value = bitmap
         val nextCount = _state.value.capturedFrameCount + 1
         _state.value = _state.value.copy(
-            hasMediaProjectionGrant = true,
+            hasMediaProjectionGrant = if (fromMediaProjection) true else _state.value.hasMediaProjectionGrant,
             isCapturingFrames = true,
             capturedFrameCount = nextCount,
-            statusBn = "লাইভ স্ক্রিন ভিশন সচল (ফ্রেম #$nextCount)"
+            statusBn = if (fromMediaProjection || _state.value.hasMediaProjectionGrant) {
+                "হাই-স্পিড লাইভ স্ক্রিন শেয়ার সচল (ফ্রেম #$nextCount)"
+            } else {
+                "অ্যাক্সেসিবিলিটি লাইভ স্ক্রিন ভিশন সচল (ফ্রেম #$nextCount)"
+            }
         )
     }
 
@@ -106,11 +110,14 @@ object ScreenCaptureSessionBus {
 
     fun captureBestAvailableScreenFrame(onBitmapReady: (Bitmap) -> Unit) {
         val cached = latestCapturedBitmap
-        if (_state.value.hasMediaProjectionGrant && cached != null && !cached.isRecycled) {
+        if (_state.value.hasMediaProjectionGrant && _state.value.isCapturingFrames && cached != null && !cached.isRecycled) {
             onBitmapReady(cached)
             return
         }
-        AccessibilityAutomationBus.requestLiveScreenFrame(onBitmapReady)
+        AccessibilityAutomationBus.requestLiveScreenFrame { bmp ->
+            onFrameCaptured(bmp, fromMediaProjection = false)
+            onBitmapReady(bmp)
+        }
     }
 }
 
@@ -134,6 +141,11 @@ class PermanentScreenCaptureService : Service() {
         val action = intent?.action ?: ACTION_START_CAPTURE
         if (action == ACTION_STOP_CAPTURE) {
             stopScreenProjection()
+            ScreenCaptureSessionBus.updateSessionState(
+                hasGrant = false,
+                isCapturing = false,
+                statusBn = "স্ক্রিন শেয়ার বন্ধ করা হয়েছে"
+            )
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
@@ -184,7 +196,7 @@ class PermanentScreenCaptureService : Service() {
                     ScreenCaptureSessionBus.updateSessionState(
                         hasGrant = false,
                         isCapturing = false,
-                        statusBn = "অ্যাক্সেসিবিলিটি লাইভ স্ক্রিন ভিশন সচল আছে"
+                        statusBn = "লাইভ স্ক্রিন শেয়ার থামানো হয়েছে"
                     )
                 }
             }, backgroundHandler)
@@ -193,8 +205,8 @@ class PermanentScreenCaptureService : Service() {
             val am = getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
             val isLowRam = am?.isLowRamDevice == true || Runtime.getRuntime().maxMemory() <= 192L * 1024L * 1024L
             val divisor = if (isLowRam) 3 else 2
-            val captureWidth = (dm.widthPixels / divisor).coerceIn(280, if (isLowRam) 480 else 640)
-            val captureHeight = (dm.heightPixels / divisor).coerceIn(480, if (isLowRam) 854 else 1180)
+            val captureWidth = ((dm.widthPixels / divisor).coerceIn(280, if (isLowRam) 480 else 640)) and -2
+            val captureHeight = ((dm.heightPixels / divisor).coerceIn(480, if (isLowRam) 854 else 1180)) and -2
             val density = dm.densityDpi
 
             val reader = ImageReader.newInstance(
@@ -241,7 +253,7 @@ class PermanentScreenCaptureService : Service() {
                                 } else {
                                     rawBmp
                                 }
-                                ScreenCaptureSessionBus.onFrameCaptured(cropped)
+                                ScreenCaptureSessionBus.onFrameCaptured(cropped, fromMediaProjection = true)
                             }
                         }
                     }
@@ -270,7 +282,7 @@ class PermanentScreenCaptureService : Service() {
             ScreenCaptureSessionBus.updateSessionState(
                 hasGrant = true,
                 isCapturing = true,
-                statusBn = "পার্মানেন্ট লাইভ স্ক্রিন শেয়ার সচল — পুনরায় পারমিশন ছাড়াই যেকোনো সময় স্ক্রিন দেখবে"
+                statusBn = "পার্মানেন্ট লাইভ স্ক্রিন শেয়ার সচল — এজেন্ট সরাসরি আপনার স্ক্রিন দেখছে"
             )
         } catch (e: Exception) {
             Log.e(TAG, "setupMediaProjection failed: ${e.message}")
@@ -370,10 +382,18 @@ class PermanentScreenCaptureService : Service() {
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, PermanentScreenCaptureService::class.java).apply {
-                action = ACTION_STOP_CAPTURE
+            ScreenCaptureSessionBus.updateSessionState(
+                hasGrant = false,
+                isCapturing = false,
+                statusBn = "স্ক্রিন শেয়ার বন্ধ করা হয়েছে"
+            )
+            try {
+                val intent = Intent(context, PermanentScreenCaptureService::class.java).apply {
+                    action = ACTION_STOP_CAPTURE
+                }
+                context.startService(intent)
+            } catch (_: Exception) {
             }
-            context.startService(intent)
         }
     }
 }

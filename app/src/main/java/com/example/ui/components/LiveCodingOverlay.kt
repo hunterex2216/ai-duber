@@ -153,7 +153,7 @@ fun LiveCodingOverlay() {
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "ARCHER AI • CODING STUDIO (MINI AI IDE)",
+                                text = "ARGON 4 • MAIN CODING STUDIO (MINI AI IDE)",
                                 color = skyBlue,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.ExtraBold,
@@ -544,7 +544,7 @@ fun LiveCodingOverlay() {
  * so Chromium WebView renderer crashes (`aw_browser_terminator.cc`) can never occur.
  */
 @Composable
-private fun NativeComposeSandboxedPreview(
+internal fun NativeComposeSandboxedPreview(
     code: String,
     fileName: String,
     language: String
@@ -933,7 +933,7 @@ private fun extractAndSimulateScriptConsoleOutput(
     return logs
 }
 
-private fun highlightCodeSyntax(rawCode: String) = buildAnnotatedString {
+internal fun highlightCodeSyntax(rawCode: String) = buildAnnotatedString {
     val lines = rawCode.split("\n")
     val keywordRegex = Regex("\\b(fun|val|var|class|object|interface|return|if|else|for|while|when|import|package|def|print|async|await|function|const|let|export|default|true|false|null)\\b")
     lines.forEachIndexed { index, line ->
