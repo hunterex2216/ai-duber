@@ -452,15 +452,6 @@ fun AgentCommandScreen(
 
                 // 2C. 5TB Google Drive ('AI_OS_Memory') Quick Connect & Zero-Storage Status Bar
                 val driveSyncState by com.example.service.GoogleDriveMemorySyncService.state.collectAsState()
-                val mainDriveSignInLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.StartActivityForResult()
-                ) { result ->
-                    com.example.service.GoogleDriveMemorySyncService.handleGoogleSignInResult(
-                        context = context,
-                        data = result.data,
-                        onStatusSpoken = onSpeakText
-                    )
-                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

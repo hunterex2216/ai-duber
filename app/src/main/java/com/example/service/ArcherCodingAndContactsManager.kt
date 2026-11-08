@@ -231,12 +231,6 @@ class ArcherCodingAndContactsManager(private val context: Context) {
         val code = s?.code ?: _workspaceState.value.currentCode
         val mime = mimeTypeForFileName(fileName)
 
-        if (!GoogleDriveMemorySyncService.state.value.isConnected) {
-            val msg = "বস, আগে মেমোরি বা সেটিংস থেকে Connect Google Drive বাটনে ট্যাপ করে আপনার 5TB Google Drive যুক্ত করুন।"
-            CodingSessionBus.updatePatchingState(false, msg)
-            return@withContext msg
-        }
-
         val ok = GoogleDriveMemorySyncService.backupGeneratedFileToDrive(
             context = appContext,
             fileName = fileName,

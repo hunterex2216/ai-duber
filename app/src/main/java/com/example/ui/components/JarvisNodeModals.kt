@@ -207,14 +207,6 @@ fun MemoryAndPlatformIdsSheet(
         onSelectTab = { activeMemoryTab = it }
     ) {
         val driveState by com.example.service.GoogleDriveMemorySyncService.state.collectAsState()
-        val driveSignInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-            contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            com.example.service.GoogleDriveMemorySyncService.handleGoogleSignInResult(
-                context = context,
-                data = result.data
-            )
-        }
 
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1872,14 +1864,6 @@ fun SettingsAndPermissionsSheet(
     val touchFxEnabled by TouchEffectBus.enabled.collectAsState()
     val audioRouterState by com.example.service.UnifiedAudioRouterBus.state.collectAsState()
     val driveState by com.example.service.GoogleDriveMemorySyncService.state.collectAsState()
-    val driveSignInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        com.example.service.GoogleDriveMemorySyncService.handleGoogleSignInResult(
-            context = context,
-            data = result.data
-        )
-    }
 
     LaunchedEffect(Unit) {
         OfflineStudioAssetEngine.inspectBundledAssets(context)
@@ -3385,19 +3369,12 @@ fun CodingAndArgonWorkspaceSheet(
                     isOutlined = true,
                     onClick = {
                         onSaveManualCodeToArcher(projectTitle, fileName, language, codeEditorText)
-                        com.example.service.CodingSessionBus.start(
-                            com.example.service.CodingSession(
-                                id = "code_${System.currentTimeMillis()}",
-                                title = projectTitle,
-                                fileName = fileName,
-                                language = language,
-                                code = codeEditorText,
-                                isSaved = true,
-                                pendingSaveConfirmation = false,
-                                activeTab = activeStudioTab
-                            )
+                        com.example.service.GoogleDriveMemorySyncService.syncCodeFileFromStudio(
+                            context = context,
+                            fileName = fileName,
+                            code = codeEditorText,
+                            projectTitle = projectTitle
                         )
-                        com.example.service.CodingSessionBus.requestSyncToDrive()
                     },
                     modifier = Modifier.weight(1f)
                 )

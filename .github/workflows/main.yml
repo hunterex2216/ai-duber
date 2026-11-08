@@ -60,6 +60,9 @@ jobs:
           if [ ! -f .env ]; then
             cp .env.example .env 2>/dev/null || touch .env
           fi
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
           if [ ! -f debug.keystore ]; then
             keytool -genkeypair -keystore debug.keystore -storepass android \
               -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
