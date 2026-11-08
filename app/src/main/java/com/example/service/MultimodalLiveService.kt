@@ -712,6 +712,8 @@ class MultimodalLiveService(
         append("\n\n")
         append(VoiceBiometricsEngine.buildPromptContextForGeminiLive())
         append("\n\n")
+        append(GoogleDriveMemorySyncService.buildLiveCloudBrainContextForPrompt())
+        append("\n\n")
         append(AppKnowledgeRegistry.compactSummaryForSystemPrompt())
         append(SmartMemoryAndSelfUpdateEngine.buildEvolutionContextForPrompt())
     }
@@ -1571,6 +1573,7 @@ class MultimodalLiveService(
                 userTurnBuf.append(chunk)
                 val fullUserText = userTurnBuf.toString().trim()
                 onUserTranscript(fullUserText)
+                VoiceBiometricsEngine.onUserTranscriptReceived(context, fullUserText)
                 checkIfUserAskedForScreenShare(fullUserText)
                 checkIfUserAskedForPowerOff(fullUserText)
             }
@@ -1614,6 +1617,7 @@ class MultimodalLiveService(
                 userTurnBuf.setLength(0)
                 modelTurnBuf.setLength(0)
                 if (finalUser.isNotBlank()) {
+                    VoiceBiometricsEngine.onUserTranscriptReceived(context, finalUser)
                     onUserTurnCompleteForMemory?.invoke(finalUser, finalModel)
                 }
                 if (finalModel.isNotBlank()) {

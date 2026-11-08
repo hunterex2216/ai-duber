@@ -82,6 +82,9 @@ data class GoogleDriveSyncState(
     val displayName: String = "",
     val driveFolderName: String = "AI_OS_Memory",
     val driveFolderId: String = "",
+    val customApiOrTokenConfigured: Boolean = false,
+    val customAppsScriptUrl: String = "",
+    val customAccessToken: String = "",
     val subFoldersReadyCount: Int = 0,
     val subFolderNames: List<String> = listOf(
         "Memories",
@@ -101,7 +104,8 @@ data class GoogleDriveSyncState(
     val backedUpScreenshotsAndFilesCount: Int = 0,
     val backedUpZipPackagesCount: Int = 0,
     val freedLocalCacheBytes: Long = 0L,
-    val lastSyncStatusBn: String = "☁️ Google Drive অটো-সিঙ্ক ইঞ্জিন প্রস্তুত হচ্ছে...",
+    val cloudBrainContextSummary: String = "",
+    val lastSyncStatusBn: String = "☁️ Google Drive কানেক্ট করুন অথবা API/Token বসান",
     val recentCloudFiles: List<DriveCloudMemoryItem> = emptyList()
 )
 
@@ -122,6 +126,9 @@ object GoogleDriveMemorySyncService {
     private const val KEY_FOLDER_ID = "ai_os_memory_folder_id"
     private const val KEY_SUBFOLDER_IDS_JSON = "ai_os_memory_subfolder_ids_json"
     private const val KEY_CACHED_TOKEN = "cached_oauth_token"
+    private const val KEY_CUSTOM_USER_TOKEN = "custom_user_oauth_token_or_key"
+    private const val KEY_CUSTOM_APPS_SCRIPT_URL = "custom_apps_script_bridge_url"
+    private const val KEY_USER_EXPLICITLY_CONNECTED = "user_explicitly_connected_drive"
     private const val KEY_QUOTA_SUMMARY = "drive_quota_summary"
     private const val KEY_MEM_COUNT = "backed_up_mem_count"
     private const val KEY_CONV_COUNT = "backed_up_conv_count"
@@ -129,6 +136,7 @@ object GoogleDriveMemorySyncService {
     private const val KEY_ZIP_COUNT = "backed_up_zip_count"
     private const val KEY_ZERO_STORAGE_MODE = "zero_phone_storage_mode"
     private const val KEY_CLOUD_INDEX_JSON = "cloud_index_json"
+    private const val KEY_CLOUD_BRAIN_SUMMARY = "cloud_brain_context_summary"
 
     const val AI_OS_MEMORY_FOLDER_NAME = "AI_OS_Memory"
     const val SUBFOLDER_MEMORIES = "Memories"
@@ -206,11 +214,15 @@ object GoogleDriveMemorySyncService {
     fun init(context: Context) {
         val appCtx = context.applicationContext
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val explicitlyConnected = prefs.getBoolean(KEY_USER_EXPLICITLY_CONNECTED, false)
         val savedEmail = prefs.getString(KEY_LINKED_EMAIL, "").orEmpty()
         val savedName = prefs.getString(KEY_DISPLAY_NAME, "").orEmpty()
         val savedFolderId = prefs.getString(KEY_FOLDER_ID, "").orEmpty()
         val cachedToken = prefs.getString(KEY_CACHED_TOKEN, "").orEmpty()
+        val customUserToken = prefs.getString(KEY_CUSTOM_USER_TOKEN, "").orEmpty()
+        val customScriptUrl = prefs.getString(KEY_CUSTOM_APPS_SCRIPT_URL, "").orEmpty()
         val savedQuota = prefs.getString(KEY_QUOTA_SUMMARY, "").orEmpty()
+        val savedBrainSummary = prefs.getString(KEY_CLOUD_BRAIN_SUMMARY, "").orEmpty()
         val memCount = prefs.getInt(KEY_MEM_COUNT, 0)
         val convCount = prefs.getInt(KEY_CONV_COUNT, 0)
         val fileCount = prefs.getInt(KEY_FILE_COUNT, 0)
@@ -220,105 +232,193 @@ object GoogleDriveMemorySyncService {
         restoreSubFolderIdsFromPrefs(prefs.getString(KEY_SUBFOLDER_IDS_JSON, "").orEmpty())
         restoreCloudIndexFromPrefs(prefs.getString(KEY_CLOUD_INDEX_JSON, "").orEmpty())
 
-        // Always ensure local mirror sub-folders exist immediately
         ensureLocalMirrorSubFolders(appCtx)
 
         val lastAccount = runCatching { GoogleSignIn.getLastSignedInAccount(appCtx) }.getOrNull()
-        val activeEmail = lastAccount?.email ?: savedEmail.ifBlank { "mdriyan1678@gmail.com" }
+        val realSignedInEmail = lastAccount?.email.orEmpty()
+        val hasCustomApi = customUserToken.isNotBlank() || customScriptUrl.isNotBlank()
+
+        // NEVER show a fake pre-connected account unless the user actually signed in or configured an API/Bridge!
+        val actuallyConnected = explicitlyConnected || realSignedInEmail.isNotBlank() || hasCustomApi
+        val activeEmail = when {
+            realSignedInEmail.isNotBlank() -> realSignedInEmail
+            explicitlyConnected && savedEmail.isNotBlank() -> savedEmail
+            hasCustomApi -> savedEmail.ifBlank { "Custom Drive API Bridge" }
+            else -> ""
+        }
         val activeName = lastAccount?.displayName ?: savedName.ifBlank { activeEmail.substringBefore("@") }
 
         val isRealFolder = savedFolderId.isNotBlank() && !savedFolderId.startsWith("gdrive_ai_os_memory_")
         _state.value = _state.value.copy(
-            isConnected = true,
-            isCloudApiVerified = cachedToken.isNotBlank() && isRealFolder,
+            isConnected = actuallyConnected,
+            isCloudApiVerified = (cachedToken.isNotBlank() && isRealFolder) || hasCustomApi,
             linkedEmail = activeEmail,
             displayName = activeName,
             driveFolderId = savedFolderId,
-            subFoldersReadyCount = subFolderIdCache.size.coerceAtLeast(ALL_REQUIRED_SUBFOLDERS.size),
+            customApiOrTokenConfigured = hasCustomApi,
+            customAppsScriptUrl = customScriptUrl,
+            customAccessToken = customUserToken,
+            subFoldersReadyCount = if (actuallyConnected) subFolderIdCache.size.coerceAtLeast(ALL_REQUIRED_SUBFOLDERS.size) else 0,
             driveQuotaSummary = savedQuota,
             zeroPhoneStorageImpactMode = zeroMode,
             backedUpMemoriesCount = memCount,
             backedUpConversationsCount = convCount,
             backedUpScreenshotsAndFilesCount = fileCount,
             backedUpZipPackagesCount = zipCount,
+            cloudBrainContextSummary = savedBrainSummary,
             recentCloudFiles = synchronized(inMemoryCloudIndex) { inMemoryCloudIndex.take(15) },
-            lastSyncStatusBn = "✅ অটো-সিঙ্ক সচল ($activeEmail) • /$AI_OS_MEMORY_FOLDER_NAME (${ALL_REQUIRED_SUBFOLDERS.size} সাব-ফোল্ডার)"
+            lastSyncStatusBn = if (actuallyConnected) {
+                "✅ অটো-সিঙ্ক ও ক্লাউড ব্রেইন সচল ($activeEmail) • /$AI_OS_MEMORY_FOLDER_NAME"
+            } else {
+                "☁️ Google Drive কানেক্ট করুন (১ ক্লিকে) অথবা 🔑 API / স্ক্রিপ্ট লিংক বসান"
+            }
         )
 
-        scope.launch {
-            autoConnectAndProvisionDriveOnStartup(appCtx)
+        if (actuallyConnected) {
+            scope.launch {
+                autoConnectAndProvisionDriveOnStartup(appCtx)
+            }
         }
     }
 
     /**
-     * Zero-Click Startup Provisioning:
-     * Automatically resolves or requests the OAuth 2.0 Bearer token on app launch, creates `/AI_OS_Memory`
-     * and all 6 sub-folders on Google Drive, and syncs all SQLite + Argon 4 data in the background.
+     * Saves user-provided Direct Google Drive API / OAuth Bearer Token, Folder ID/Link, or
+     * Google Apps Script Web App Bridge URL (`https://script.google.com/macros/s/.../exec`),
+     * then immediately verifies, creates all folders, restores past brain memories, and syncs all data!
+     */
+    fun saveCustomDriveApiConfig(
+        context: Context,
+        customAccessTokenOrKey: String,
+        customFolderIdOrUrl: String,
+        customAppsScriptBridgeUrl: String,
+        onStatusSpoken: (String) -> Unit = {}
+    ) {
+        val appCtx = context.applicationContext
+        val cleanToken = customAccessTokenOrKey.trim().removePrefix("Bearer ").trim()
+        val cleanScriptUrl = customAppsScriptBridgeUrl.trim()
+        val extractedFolderId = extractDriveFolderIdFromInput(customFolderIdOrUrl.trim())
+
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val hasAny = cleanToken.isNotBlank() || cleanScriptUrl.isNotBlank() || extractedFolderId.isNotBlank()
+
+        prefs.edit()
+            .putString(KEY_CUSTOM_USER_TOKEN, cleanToken)
+            .putString(KEY_CUSTOM_APPS_SCRIPT_URL, cleanScriptUrl)
+            .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, hasAny || _state.value.isConnected)
+            .apply {
+                if (cleanToken.isNotBlank()) {
+                    putString(KEY_CACHED_TOKEN, cleanToken)
+                }
+                if (extractedFolderId.isNotBlank()) {
+                    putString(KEY_FOLDER_ID, extractedFolderId)
+                }
+            }
+            .apply()
+
+        val label = when {
+            cleanScriptUrl.isNotBlank() -> "Direct Cloud Script API"
+            cleanToken.isNotBlank() -> "Direct OAuth Token API"
+            else -> _state.value.linkedEmail.ifBlank { "Google Drive API" }
+        }
+
+        _state.value = _state.value.copy(
+            isConnected = hasAny || _state.value.isConnected,
+            isCloudApiVerified = hasAny,
+            linkedEmail = _state.value.linkedEmail.ifBlank { label },
+            driveFolderId = extractedFolderId.ifBlank { _state.value.driveFolderId },
+            customApiOrTokenConfigured = hasAny,
+            customAppsScriptUrl = cleanScriptUrl,
+            customAccessToken = cleanToken,
+            isSyncing = true,
+            lastSyncStatusBn = "⚡ আপনার দেওয়া Drive API কনফিগারেশন দিয়ে ক্লাউড ব্রেইন ও ফোল্ডার সিঙ্ক হচ্ছে..."
+        )
+
+        scope.launch {
+            if (cleanToken.isNotBlank()) {
+                verifyDriveAboutAndSyncFolder(appCtx, cleanToken, speakResult = false)
+            }
+            pullAndRestoreBrainFromDriveToLocal(appCtx)
+            syncAllAppDataToDriveNow(appCtx, speakResult = true, onStatusSpoken = onStatusSpoken)
+        }
+    }
+
+    private fun extractDriveFolderIdFromInput(raw: String): String {
+        if (raw.isBlank()) return ""
+        val folderRegex = Regex("folders/([a-zA-Z0-9_-]{10,})")
+        folderRegex.find(raw)?.groupValues?.getOrNull(1)?.let { return it }
+        val idParamRegex = Regex("[?&]id=([a-zA-Z0-9_-]{10,})")
+        idParamRegex.find(raw)?.groupValues?.getOrNull(1)?.let { return it }
+        return if (!raw.contains("http") && raw.length >= 10) raw else ""
+    }
+
+    /**
+     * Ready-to-paste Google Apps Script code that the user can deploy as a Web App (`script.google.com`)
+     * for 100% permanent, zero-popup, never-expiring Google Drive auto-upload & AI brain sync!
+     */
+    fun getReadyToPasteAppsScriptCode(): String = """
+function doPost(e) {
+  var data = JSON.parse(e.postData.contents);
+  var rootIter = DriveApp.getFoldersByName("AI_OS_Memory");
+  var root = rootIter.hasNext() ? rootIter.next() : DriveApp.createFolder("AI_OS_Memory");
+  var subName = data.subFolder || "Memories";
+  var subIter = root.getFoldersByName(subName);
+  var folder = subIter.hasNext() ? subIter.next() : root.createFolder(subName);
+  var fileName = data.fileName || "ai_data.json";
+  var existing = folder.getFilesByName(fileName);
+  while (existing.hasNext()) { existing.next().setTrashed(true); }
+  var content = data.isBase64 ? Utilities.base64Decode(data.content) : data.content;
+  var blob = Utilities.newBlob(content, data.mimeType || "application/json", fileName);
+  var file = folder.createFile(blob);
+  return ContentService.createTextOutput(JSON.stringify({ status: "ok", fileId: file.getId(), folderId: root.getId(), url: file.getUrl() })).setMimeType(ContentService.MimeType.JSON);
+}
+function doGet(e) {
+  var rootIter = DriveApp.getFoldersByName("AI_OS_Memory");
+  if (!rootIter.hasNext()) return ContentService.createTextOutput(JSON.stringify({ status: "empty" })).setMimeType(ContentService.MimeType.JSON);
+  var root = rootIter.next();
+  var backupIter = root.getFoldersByName("Master_Backups");
+  var masterJson = "";
+  if (backupIter.hasNext()) {
+    var fIter = backupIter.next().getFilesByName("AI_OS_Master_Backup.json");
+    if (fIter.hasNext()) masterJson = fIter.next().getBlob().getDataAsString();
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "ok", folderId: root.getId(), masterBackup: masterJson })).setMimeType(ContentService.MimeType.JSON);
+}
+""".trimIndent()
+
+    /**
+     * Silent Startup Sync (NEVER triggers any popup dialog on startup!).
+     * Automatically restores the AI Brain from Google Drive (`pullAndRestoreBrainFromDriveToLocal`)
+     * and syncs local changes in the background.
      */
     private suspend fun autoConnectAndProvisionDriveOnStartup(context: Context) = withContext(Dispatchers.IO) {
         val appCtx = context.applicationContext
-        var token = resolveAccessToken(
+        val token = resolveAccessToken(
             context = appCtx,
             forceFresh = false,
-            allowInteractiveRecovery = !hasTriggeredAutoStartupAuthThisProcess
+            allowInteractiveRecovery = false // NEVER launch popups on startup
         )
 
         if (token.isNotBlank()) {
             val verified = verifyDriveAboutAndSyncFolder(appCtx, token, speakResult = false)
             if (!verified) {
-                token = resolveAccessToken(
+                val freshToken = resolveAccessToken(
                     context = appCtx,
                     forceFresh = true,
-                    allowInteractiveRecovery = !hasTriggeredAutoStartupAuthThisProcess
+                    allowInteractiveRecovery = false
                 )
-                if (token.isNotBlank()) {
-                    verifyDriveAboutAndSyncFolder(appCtx, token, speakResult = false)
+                if (freshToken.isNotBlank()) {
+                    verifyDriveAboutAndSyncFolder(appCtx, freshToken, speakResult = false)
                 }
             }
-            syncAllAppDataToDriveNow(appCtx, speakResult = false)
-            return@withContext
         }
-
-        // If no token is available yet and we haven't triggered startup authorization in this session,
-        // automatically invoke Identity.getAuthorizationClient so the user doesn't have to click Connect!
-        if (!hasTriggeredAutoStartupAuthThisProcess) {
-            hasTriggeredAutoStartupAuthThisProcess = true
-            try {
-                val authRequest = AuthorizationRequest.builder()
-                    .setRequestedScopes(listOf(Scope(DriveScopes.DRIVE_FILE)))
-                    .build()
-
-                Identity.getAuthorizationClient(appCtx)
-                    .authorize(authRequest)
-                    .addOnSuccessListener { result ->
-                        if (result.hasResolution()) {
-                            val pendingIntent = result.pendingIntent
-                            if (pendingIntent != null) {
-                                _pendingAuthIntentSender.value =
-                                    IntentSenderRequest.Builder(pendingIntent.intentSender).build()
-                                return@addOnSuccessListener
-                            }
-                        }
-                        onDirectAuthorizationSuccess(appCtx, result, onStatusSpoken = {})
-                    }
-                    .addOnFailureListener {
-                        // Even if Play Services OAuth isn't authorized yet, sync all local SQLite data into the mirror vault
-                        scope.launch {
-                            syncAllAppDataToDriveNow(appCtx, speakResult = false)
-                        }
-                    }
-            } catch (_: Exception) {
-                syncAllAppDataToDriveNow(appCtx, speakResult = false)
-            }
-        } else {
-            syncAllAppDataToDriveNow(appCtx, speakResult = false)
-        }
+        pullAndRestoreBrainFromDriveToLocal(appCtx)
+        syncAllAppDataToDriveNow(appCtx, speakResult = false)
     }
 
     /**
-     * Initiates Direct Google Drive API v3 OAuth 2.0 Authorization using Google Identity Services
-     * (`Identity.getAuthorizationClient(context).authorize(...)`), with a single-pass fallback to
-     * basic Google Sign-In / System Account Picker (guaranteed zero infinite loops).
+     * Single-Click Google Drive Sign-In:
+     * Launches ONLY ONE single sign-in dialog (`buildGoogleSignInClient(appCtx).signInIntent` with `DRIVE_FILE` scope).
+     * Never chains 2 or 3 popups back-to-back!
      */
     fun startDirectDriveAuthorization(
         context: Context,
@@ -330,90 +430,37 @@ object GoogleDriveMemorySyncService {
 
         _state.value = _state.value.copy(
             isSyncing = true,
-            lastSyncStatusBn = "☁️ Google Drive API v3 কানেকশন ও ৬টি সাব-ফোল্ডার প্রস্তুত হচ্ছে..."
+            lastSyncStatusBn = "☁️ Google অ্যাকাউন্ট সিলেক্ট করুন (শুধুমাত্র ১ বার)..."
         )
+
+        // Check if already signed in with GoogleSignIn and token is available without showing any popup
+        val existingAccount = runCatching { GoogleSignIn.getLastSignedInAccount(appCtx) }.getOrNull()
+        if (existingAccount != null && !existingAccount.email.isNullOrBlank()) {
+            scope.launch {
+                val token = fetchTokenForAccount(appCtx, existingAccount, allowPopup = true)
+                if (token.isNotBlank()) {
+                    onAccountConnected(appCtx, existingAccount, onStatusSpoken)
+                    return@launch
+                }
+            }
+        }
 
         try {
-            val authRequest = AuthorizationRequest.builder()
-                .setRequestedScopes(listOf(Scope(DriveScopes.DRIVE_FILE)))
-                .build()
-
-            Identity.getAuthorizationClient(appCtx)
-                .authorize(authRequest)
-                .addOnSuccessListener { result ->
-                    if (result.hasResolution()) {
-                        val pendingIntent = result.pendingIntent
-                        if (pendingIntent != null) {
-                            _pendingAuthIntentSender.value =
-                                IntentSenderRequest.Builder(pendingIntent.intentSender).build()
-                            _state.value = _state.value.copy(
-                                isSyncing = false,
-                                lastSyncStatusBn = "☁️ Google অ্যাকাউন্ট ও Drive API পারমিশন অ্যাপ্রুভ করুন..."
-                            )
-                            return@addOnSuccessListener
-                        }
-                    }
-                    onDirectAuthorizationSuccess(appCtx, result, onStatusSpoken)
-                }
-                .addOnFailureListener {
-                    launchBasicAccountSelectionFallback(appCtx, onStatusSpoken)
-                }
+            // Launch standard single-step GoogleSignInClient with DRIVE_FILE scope
+            val signInIntent = buildGoogleSignInClient(appCtx).signInIntent
+            _pendingAuthRecoveryIntent.value = signInIntent
         } catch (_: Exception) {
-            launchBasicAccountSelectionFallback(appCtx, onStatusSpoken)
-        }
-    }
-
-    /**
-     * Single-shot fallback when `Identity.getAuthorizationClient` fails (e.g., on custom-signed APKs).
-     */
-    private fun launchBasicAccountSelectionFallback(
-        context: Context,
-        onStatusSpoken: (String) -> Unit = {}
-    ) {
-        val appCtx = context.applicationContext
-        val existing = runCatching { GoogleSignIn.getLastSignedInAccount(appCtx) }.getOrNull()
-        if (existing != null && !existing.email.isNullOrBlank()) {
-            scope.launch {
-                onAccountConnected(appCtx, existing, onStatusSpoken)
-            }
-            return
-        }
-
-        if (!hasTriedFallbackPickerThisAttempt) {
-            hasTriedFallbackPickerThisAttempt = true
-            try {
-                val basicIntent = buildBasicEmailSignInClient(appCtx).signInIntent
-                _pendingAuthRecoveryIntent.value = basicIntent
-                _state.value = _state.value.copy(
-                    isSyncing = false,
-                    lastSyncStatusBn = "☁️ আপনার Gmail অ্যাকাউন্ট সিলেক্ট করুন..."
-                )
-                return
-            } catch (_: Exception) {
-            }
             try {
                 _pendingAuthRecoveryIntent.value = createAccountPickerIntent()
+            } catch (_: Exception) {
                 _state.value = _state.value.copy(
                     isSyncing = false,
-                    lastSyncStatusBn = "☁️ আপনার Google অ্যাকাউন্ট সিলেক্ট করুন..."
+                    lastSyncStatusBn = "⚠️ Google Sign-In পাওয়া যায়নি—পাশের '🔑 API' বাটনে ট্যাপ করে Drive Token/Script দিন।"
                 )
-                return
-            } catch (_: Exception) {
             }
         }
-
-        connectGmailHybridAccount(
-            context = appCtx,
-            email = _state.value.linkedEmail.ifBlank { "mdriyan1678@gmail.com" },
-            displayName = "Boss 5TB Drive",
-            oauthToken = "",
-            onStatusSpoken = onStatusSpoken
-        )
     }
 
-    /**
-     * Handles the result from `StartIntentSenderForResult` launched for `Identity.getAuthorizationClient`.
-     */
     fun handleAuthorizationIntentResult(
         context: Context,
         data: Intent?,
@@ -421,14 +468,17 @@ object GoogleDriveMemorySyncService {
     ) {
         val appCtx = context.applicationContext
         if (data == null) {
-            launchBasicAccountSelectionFallback(appCtx, onStatusSpoken)
+            _state.value = _state.value.copy(
+                isSyncing = false,
+                lastSyncStatusBn = "☁️ Google Drive কানেকশন বাতিল করা হয়েছে।"
+            )
             return
         }
         try {
             val result = Identity.getAuthorizationClient(appCtx).getAuthorizationResultFromIntent(data)
             onDirectAuthorizationSuccess(appCtx, result, onStatusSpoken)
         } catch (_: Exception) {
-            launchBasicAccountSelectionFallback(appCtx, onStatusSpoken)
+            handleGoogleSignInResult(appCtx, data, onStatusSpoken = onStatusSpoken)
         }
     }
 
@@ -448,34 +498,25 @@ object GoogleDriveMemorySyncService {
                 val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 prefs.edit()
                     .putString(KEY_CACHED_TOKEN, accessToken)
+                    .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, true)
                     .apply {
                         if (emailFromAcct.isNotBlank()) putString(KEY_LINKED_EMAIL, emailFromAcct)
                         if (nameFromAcct.isNotBlank()) putString(KEY_DISPLAY_NAME, nameFromAcct)
                     }
                     .apply()
 
-                val ok = verifyDriveAboutAndSyncFolder(
+                verifyDriveAboutAndSyncFolder(
                     context = appCtx,
                     accessToken = accessToken,
                     speakResult = false,
                     onStatusSpoken = onStatusSpoken
                 )
-                if (!ok) {
-                    val fallbackEmail = emailFromAcct.ifBlank {
-                        prefs.getString(KEY_LINKED_EMAIL, "").orEmpty().ifBlank { "mdriyan1678@gmail.com" }
-                    }
-                    _state.value = _state.value.copy(
-                        isConnected = true,
-                        isCloudApiVerified = true,
-                        linkedEmail = fallbackEmail,
-                        displayName = nameFromAcct.ifBlank { fallbackEmail.substringBefore("@") }
-                    )
-                }
+                pullAndRestoreBrainFromDriveToLocal(appCtx)
                 syncAllAppDataToDriveNow(appCtx, speakResult = true, onStatusSpoken = onStatusSpoken)
             } else if (googleAccount != null && !googleAccount.email.isNullOrBlank()) {
                 onAccountConnected(appCtx, googleAccount, onStatusSpoken)
             } else {
-                launchBasicAccountSelectionFallback(appCtx, onStatusSpoken)
+                _state.value = _state.value.copy(isSyncing = false)
             }
         }
     }
@@ -513,12 +554,12 @@ object GoogleDriveMemorySyncService {
     }
 
     /**
-     * Handles the ActivityResult Intent from `GoogleSignInClient`, `AccountPicker`, or `UserRecoverableAuthException`.
+     * Handles the single sign-in result without ever chaining into additional popups!
      */
     fun handleGoogleSignInResult(
         context: Context,
         data: Intent?,
-        fallbackEmailIfEmulator: String = "mdriyan1678@gmail.com",
+        fallbackEmailIfEmulator: String = "",
         onStatusSpoken: (String) -> Unit = {}
     ) {
         val appCtx = context.applicationContext
@@ -564,13 +605,10 @@ object GoogleDriveMemorySyncService {
             } catch (_: Exception) {
             }
 
-            val fallbackEmail = _state.value.linkedEmail.ifBlank { fallbackEmailIfEmulator }
-            connectGmailHybridAccount(
-                context = appCtx,
-                email = fallbackEmail,
-                displayName = "Boss 5TB Drive",
-                oauthToken = "",
-                onStatusSpoken = onStatusSpoken
+            // Do NOT launch another popup! Update status cleanly.
+            _state.value = _state.value.copy(
+                isSyncing = false,
+                lastSyncStatusBn = "⚠️ Google Sign-In সম্পন্ন হয়নি। আবার চেষ্টা করুন অথবা পাশের '🔑 API' বাটনে ট্যাপ করে Drive Token/Script দিন।"
             )
         }
     }
@@ -595,13 +633,18 @@ object GoogleDriveMemorySyncService {
         onStatusSpoken: (String) -> Unit
     ) {
         val appCtx = context.applicationContext
-        val email = account.email.orEmpty().ifBlank { "mdriyan1678@gmail.com" }
+        val email = account.email.orEmpty()
+        if (email.isBlank()) {
+            _state.value = _state.value.copy(isSyncing = false)
+            return
+        }
         val name = account.displayName.orEmpty().ifBlank { email.substringBefore("@") }
 
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(KEY_LINKED_EMAIL, email)
             .putString(KEY_DISPLAY_NAME, name)
+            .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, true)
             .apply()
 
         _state.value = _state.value.copy(
@@ -609,30 +652,33 @@ object GoogleDriveMemorySyncService {
             linkedEmail = email,
             displayName = name,
             isSyncing = true,
-            lastSyncStatusBn = "☁️ Google Drive ($email) কানেক্ট হচ্ছে এবং /$AI_OS_MEMORY_FOLDER_NAME ও সাব-ফোল্ডারগুলো প্রস্তুত হচ্ছে..."
+            lastSyncStatusBn = "☁️ Google Drive ($email) কানেক্ট হয়েছে — ক্লাউড ব্রেইন ও /$AI_OS_MEMORY_FOLDER_NAME সিঙ্ক হচ্ছে..."
         )
 
-        val token = fetchTokenForAccount(appCtx, account)
+        val token = fetchTokenForAccount(appCtx, account, allowPopup = !hasTriedConsentRecoveryThisAttempt)
         if (token.isNotBlank()) {
             verifyDriveAboutAndSyncFolder(appCtx, token, speakResult = false)
         }
+        pullAndRestoreBrainFromDriveToLocal(appCtx)
         syncAllAppDataToDriveNow(appCtx, speakResult = true, onStatusSpoken = onStatusSpoken)
     }
 
     fun connectGmailHybridAccount(
         context: Context,
-        email: String = "mdriyan1678@gmail.com",
+        email: String,
         displayName: String = "Boss 5TB Drive",
         oauthToken: String = "",
         onStatusSpoken: (String) -> Unit = {}
     ) {
         val appCtx = context.applicationContext
-        val cleanEmail = email.trim().ifBlank { "mdriyan1678@gmail.com" }
+        val cleanEmail = email.trim()
+        if (cleanEmail.isBlank()) return
         val cleanName = displayName.trim().ifBlank { cleanEmail.substringBefore("@") }
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(KEY_LINKED_EMAIL, cleanEmail)
             .putString(KEY_DISPLAY_NAME, cleanName)
+            .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, true)
             .apply {
                 if (oauthToken.isNotBlank()) putString(KEY_CACHED_TOKEN, oauthToken.trim())
             }
@@ -648,21 +694,12 @@ object GoogleDriveMemorySyncService {
             )
             val token = resolveAccessToken(
                 context = appCtx,
-                allowInteractiveRecovery = !hasTriedConsentRecoveryThisAttempt
+                allowInteractiveRecovery = false
             )
             if (token.isNotBlank()) {
                 verifyDriveAboutAndSyncFolder(appCtx, token, speakResult = false)
-            } else {
-                val fallbackFolderId = "gdrive_ai_os_memory_${cleanEmail.hashCode().toUInt().toString(16)}"
-                prefs.edit().putString(KEY_FOLDER_ID, fallbackFolderId).apply()
-                _state.value = _state.value.copy(
-                    isConnected = true,
-                    linkedEmail = cleanEmail,
-                    displayName = cleanName,
-                    driveFolderId = fallbackFolderId,
-                    subFoldersReadyCount = ALL_REQUIRED_SUBFOLDERS.size
-                )
             }
+            pullAndRestoreBrainFromDriveToLocal(appCtx)
             syncAllAppDataToDriveNow(appCtx, speakResult = true, onStatusSpoken = onStatusSpoken)
         }
     }
@@ -787,6 +824,9 @@ object GoogleDriveMemorySyncService {
             .remove(KEY_FOLDER_ID)
             .remove(KEY_SUBFOLDER_IDS_JSON)
             .remove(KEY_CACHED_TOKEN)
+            .remove(KEY_CUSTOM_USER_TOKEN)
+            .remove(KEY_CUSTOM_APPS_SCRIPT_URL)
+            .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, false)
             .remove(KEY_QUOTA_SUMMARY)
             .apply()
         subFolderIdCache.clear()
@@ -815,7 +855,8 @@ object GoogleDriveMemorySyncService {
 
     private suspend fun fetchTokenForAccount(
         context: Context,
-        account: GoogleSignInAccount
+        account: GoogleSignInAccount,
+        allowPopup: Boolean = false
     ): String = withContext(Dispatchers.IO) {
         val appCtx = context.applicationContext
         val acct = account.account ?: account.email?.takeIf { it.isNotBlank() }?.let { Account(it, "com.google") }
@@ -831,7 +872,7 @@ object GoogleDriveMemorySyncService {
                     return@withContext token
                 }
             } catch (recoverable: UserRecoverableAuthException) {
-                if (!hasTriedConsentRecoveryThisAttempt) {
+                if (allowPopup && !hasTriedConsentRecoveryThisAttempt) {
                     hasTriedConsentRecoveryThisAttempt = true
                     recoverable.intent?.let { _pendingAuthRecoveryIntent.value = it }
                 }
@@ -842,8 +883,8 @@ object GoogleDriveMemorySyncService {
     }
 
     /**
-     * Obtains a valid OAuth2 Bearer token for `DriveScopes.DRIVE_FILE` via cached token,
-     * `GoogleSignIn.getLastSignedInAccount`, or device Google accounts via `GoogleAuthUtil.getToken`.
+     * Obtains a valid OAuth2 Bearer token for `DriveScopes.DRIVE_FILE` via user's custom token,
+     * cached token, `GoogleSignIn.getLastSignedInAccount`, or device Google accounts.
      */
     private suspend fun resolveAccessToken(
         context: Context,
@@ -852,6 +893,10 @@ object GoogleDriveMemorySyncService {
     ): String = withContext(Dispatchers.IO) {
         val appCtx = context.applicationContext
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val customUserToken = prefs.getString(KEY_CUSTOM_USER_TOKEN, "").orEmpty()
+        if (customUserToken.isNotBlank() && !forceFresh) {
+            return@withContext customUserToken
+        }
         val cached = prefs.getString(KEY_CACHED_TOKEN, "").orEmpty()
         if (!forceFresh && cached.isNotBlank()) {
             return@withContext cached
@@ -887,7 +932,181 @@ object GoogleDriveMemorySyncService {
             } catch (_: Exception) {
             }
         }
-        if (forceFresh) "" else cached
+        if (customUserToken.isNotBlank()) customUserToken else if (forceFresh) "" else cached
+    }
+
+    /**
+     * Pulls and restores the AI's complete Cloud Brain (`AI_OS_Master_Backup.json` + `All_Enrolled_Voice_Profiles.json`)
+     * from Google Drive (via REST API v3 or Custom Apps Script Bridge URL) into local SQLite, `VoiceBiometricsEngine`,
+     * and `cloudBrainContextSummary` so the AI immediately remembers all past conversations, rules, and voices!
+     */
+    suspend fun pullAndRestoreBrainFromDriveToLocal(context: Context): String = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val customScriptUrl = prefs.getString(KEY_CUSTOM_APPS_SCRIPT_URL, "").orEmpty()
+        val token = resolveAccessToken(appCtx, allowInteractiveRecovery = false)
+
+        var masterBackupRaw = ""
+        var voiceProfilesRaw = ""
+
+        // 1. Try Apps Script Bridge URL if configured
+        if (customScriptUrl.startsWith("http")) {
+            runCatching {
+                val req = Request.Builder().url(customScriptUrl).get().build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val body = resp.body?.string().orEmpty()
+                        val obj = JSONObject(body)
+                        val folderId = obj.optString("folderId")
+                        if (folderId.isNotBlank()) {
+                            prefs.edit().putString(KEY_FOLDER_ID, folderId).apply()
+                        }
+                        masterBackupRaw = obj.optString("masterBackup")
+                    }
+                }
+            }
+        }
+
+        // 2. Try Direct Google Drive REST API v3
+        if (token.isNotBlank()) {
+            if (masterBackupRaw.isBlank()) {
+                masterBackupRaw = downloadDriveFileContentByName(token, "AI_OS_Master_Backup.json")
+            }
+            voiceProfilesRaw = downloadDriveFileContentByName(token, "All_Enrolled_Voice_Profiles.json")
+        }
+
+        // 3. Fallback to local Drive mirror if offline
+        if (masterBackupRaw.isBlank()) {
+            val localBackup = File(getLocalDriveMirrorSubDir(appCtx, SUBFOLDER_BACKUPS), "AI_OS_Master_Backup.json")
+            if (localBackup.exists()) {
+                masterBackupRaw = runCatching { localBackup.readText(Charsets.UTF_8) }.getOrDefault("")
+            }
+        }
+        if (voiceProfilesRaw.isBlank()) {
+            val localVp = File(getLocalDriveMirrorSubDir(appCtx, SUBFOLDER_VOICE_PROFILES), "All_Enrolled_Voice_Profiles.json")
+            if (localVp.exists()) {
+                voiceProfilesRaw = runCatching { localVp.readText(Charsets.UTF_8) }.getOrDefault("")
+            }
+        }
+
+        if (voiceProfilesRaw.isNotBlank()) {
+            VoiceBiometricsEngine.restoreProfilesFromCloudJson(appCtx, voiceProfilesRaw)
+        }
+
+        if (masterBackupRaw.isNotBlank()) {
+            runCatching {
+                val root = JSONObject(masterBackupRaw)
+                val db = AgentDatabase.getInstance(appCtx)
+                val memDao = db.agentMemoryNoteDao()
+                val existingNotes = memDao.getRecentNotesSnapshot(100)
+
+                val memArr = root.optJSONArray("memories")
+                val restoredMemLines = mutableListOf<String>()
+                if (memArr != null) {
+                    for (i in 0 until memArr.length()) {
+                        val m = memArr.optJSONObject(i) ?: continue
+                        val title = m.optString("title").trim()
+                        val content = m.optString("content").trim()
+                        val cat = m.optString("category", "CLOUD_MEMORY").trim()
+                        if (title.isNotBlank() && content.isNotBlank()) {
+                            restoredMemLines.add("[$title] $content ($cat)")
+                            if (existingNotes.none { it.title.equals(title, ignoreCase = true) && it.content.equals(content, ignoreCase = true) }) {
+                                memDao.insertNote(
+                                    AgentMemoryNoteEntity(
+                                        title = title,
+                                        content = content,
+                                        category = cat,
+                                        timestamp = m.optLong("timestamp", System.currentTimeMillis())
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                val convArr = root.optJSONArray("conversations")
+                val restoredConvLines = mutableListOf<String>()
+                if (convArr != null) {
+                    for (i in 0 until minOf(convArr.length(), 15)) {
+                        val c = convArr.optJSONObject(i) ?: continue
+                        val u = c.optString("userPrompt").trim()
+                        val a = c.optString("agentReply").trim()
+                        if (u.isNotBlank() || a.isNotBlank()) {
+                            restoredConvLines.add("User: ${u.take(110)} -> AI: ${a.take(140)}")
+                        }
+                    }
+                }
+
+                val brainBlock = buildString {
+                    if (restoredMemLines.isNotEmpty()) {
+                        appendLine("CLOUD DRIVE PERMANENT MEMORIES (${restoredMemLines.size}):")
+                        restoredMemLines.take(25).forEach { appendLine("- $it") }
+                    }
+                    if (restoredConvLines.isNotEmpty()) {
+                        appendLine("CLOUD DRIVE PAST CONVERSATION HISTORY (${restoredConvLines.size}):")
+                        restoredConvLines.take(12).forEach { appendLine("- $it") }
+                    }
+                }.trim()
+
+                if (brainBlock.isNotBlank()) {
+                    prefs.edit().putString(KEY_CLOUD_BRAIN_SUMMARY, brainBlock).apply()
+                    SmartMemoryAndSelfUpdateEngine.syncLiveMemoryNotesSummary(restoredMemLines + restoredConvLines)
+                    _state.value = _state.value.copy(cloudBrainContextSummary = brainBlock)
+                }
+            }
+        }
+        _state.value.cloudBrainContextSummary
+    }
+
+    private fun downloadDriveFileContentByName(accessToken: String, exactFileName: String): String {
+        if (accessToken.isBlank()) return ""
+        return try {
+            val escaped = exactFileName.replace("'", "\\'")
+            val q = URLEncoder.encode("name = '$escaped' and trashed = false", "UTF-8")
+            val findUrl = "$DRIVE_API_BASE/files?q=$q&pageSize=1&orderBy=modifiedTime desc&fields=files(id,name)"
+            val req = Request.Builder()
+                .url(findUrl)
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+            var fileId = ""
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val files = JSONObject(resp.body?.string().orEmpty()).optJSONArray("files")
+                    if (files != null && files.length() > 0) {
+                        fileId = files.getJSONObject(0).optString("id")
+                    }
+                }
+            }
+            if (fileId.isBlank()) return ""
+            val dlReq = Request.Builder()
+                .url("$DRIVE_API_BASE/files/$fileId?alt=media")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+            httpClient.newCall(dlReq).execute().use { resp ->
+                if (resp.isSuccessful) resp.body?.string().orEmpty() else ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    fun buildLiveCloudBrainContextForPrompt(): String {
+        val st = _state.value
+        val summary = st.cloudBrainContextSummary
+        return buildString {
+            append("\n\n5TB GOOGLE DRIVE CLOUD BRAIN & LIVE MEMORY VAULT (`/$AI_OS_MEMORY_FOLDER_NAME`):\n")
+            append("- DRIVE CONNECTION STATUS: ${if (st.isConnected) "CONNECTED (${st.linkedEmail})" else "LOCAL MIRROR READY"}\n")
+            if (summary.isNotBlank()) {
+                append(summary).append("\n")
+            }
+            if (st.recentCloudFiles.isNotEmpty()) {
+                append("- RECENT FILES IN GOOGLE DRIVE: ")
+                append(st.recentCloudFiles.take(10).joinToString("; ") { "${it.subFolderName}/${it.name}: ${it.snippetText.take(80)}" })
+                append("\n")
+            }
+        }
     }
 
     /**
@@ -1614,13 +1833,11 @@ object GoogleDriveMemorySyncService {
         val appCtx = context.applicationContext
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val activeEmail = _state.value.linkedEmail.ifBlank {
-            prefs.getString(KEY_LINKED_EMAIL, "").orEmpty().ifBlank { "mdriyan1678@gmail.com" }
+            prefs.getString(KEY_LINKED_EMAIL, "").orEmpty()
         }
-        prefs.edit().putString(KEY_LINKED_EMAIL, activeEmail).apply()
-        _state.value = _state.value.copy(
-            isConnected = true,
-            linkedEmail = activeEmail
-        )
+        if (activeEmail.isNotBlank()) {
+            prefs.edit().putString(KEY_LINKED_EMAIL, activeEmail).apply()
+        }
 
         val token = resolveAccessToken(appCtx, allowInteractiveRecovery = false)
         if (token.isNotBlank()) {
@@ -1805,7 +2022,7 @@ object GoogleDriveMemorySyncService {
 
     /**
      * Opens the live `/AI_OS_Memory` folder on Google Drive (`https://drive.google.com/drive/folders/<folderId>`)
-     * or sends `AI_OS_Master_Backup.json` directly into the installed Google Drive app (`com.google.android.apps.docs`).
+     * directly in browser/Drive app via `ACTION_VIEW` (NEVER opens a manual local file share sheet!).
      */
     fun openOrShareToGoogleDriveApp(
         context: Context,
@@ -1822,50 +2039,19 @@ object GoogleDriveMemorySyncService {
             }
 
             withContext(Dispatchers.Main) {
-                if (!folderId.isNullOrBlank()) {
-                    try {
-                        val driveUrl = "https://drive.google.com/drive/folders/$folderId"
-                        val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(driveUrl)).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        context.startActivity(viewIntent)
-                        onStatusSpoken("জি স্যার, আপনার গুগল ড্রাইভের AI_OS_Memory ফোল্ডার ওপেন করা হয়েছে।")
-                        return@withContext
-                    } catch (_: Exception) {
-                    }
+                val targetUrl = if (!folderId.isNullOrBlank()) {
+                    "https://drive.google.com/drive/folders/$folderId"
+                } else {
+                    "https://drive.google.com/drive/my-drive"
                 }
-
                 try {
-                    val backupSubDir = getLocalDriveMirrorSubDir(appCtx, SUBFOLDER_BACKUPS)
-                    val masterFile = File(backupSubDir, "AI_OS_Master_Backup.json")
-                    if (masterFile.exists()) {
-                        val authority = "${appCtx.packageName}.fileprovider"
-                        val uri = FileProvider.getUriForFile(appCtx, authority, masterFile)
-                        val driveShareIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "application/json"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            putExtra(Intent.EXTRA_SUBJECT, "AI_OS_Master_Backup.json")
-                            putExtra(Intent.EXTRA_TITLE, "AI_OS_Master_Backup.json")
-                            setPackage("com.google.android.apps.docs")
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        if (driveShareIntent.resolveActivity(appCtx.packageManager) != null) {
-                            context.startActivity(driveShareIntent)
-                            onStatusSpoken("জি স্যার, সরাসরি Google Drive অ্যাপে আপনার AI_OS_Memory ব্যাকআপ ফাইল ওপেন করা হয়েছে।")
-                            return@withContext
-                        }
-                    }
-                } catch (_: Exception) {
-                }
-
-                try {
-                    val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://drive.google.com/drive/my-drive")).apply {
+                    val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     context.startActivity(viewIntent)
-                    onStatusSpoken("জি স্যার, আপনার গুগল ড্রাইভ ওপেন করা হয়েছে।")
+                    onStatusSpoken("জি স্যার, আপনার গুগল ড্রাইভের AI_OS_Memory ফোল্ডার ওপেন করা হয়েছে।")
                 } catch (_: Exception) {
-                    onStatusSpoken("জি স্যার, আপনার সব ডাটা AI_OS_Memory ফোল্ডারে সুরক্ষিত আছে।")
+                    onStatusSpoken("জি স্যার, আপনার সব ডাটা AI_OS_Memory ফোল্ডারে অটো-সিঙ্ক হয়ে আছে।")
                 }
             }
         }
@@ -2140,10 +2326,22 @@ object GoogleDriveMemorySyncService {
         }
         persistCloudIndexToPrefs(appCtx)
 
+        // 1B. If user configured a Google Apps Script Web App Bridge URL, upload directly to Google Drive via Script Bridge!
+        val scriptBridgeId = uploadViaAppsScriptBridgeIfConfigured(
+            appCtx = appCtx,
+            fileName = fileName,
+            mimeType = mimeType,
+            subFolderName = cleanSub,
+            description = description,
+            snippetText = snippetText,
+            nowFmt = nowFmt,
+            bytes = bytes
+        )
+
         // 2. Upload via 2-Step Direct Google Drive REST API v3
         var token = resolveAccessToken(appCtx, allowInteractiveRecovery = false)
         if (token.isBlank()) {
-            return@withContext fallbackId
+            return@withContext scriptBridgeId.ifBlank { fallbackId }
         }
 
         try {
@@ -2227,6 +2425,85 @@ object GoogleDriveMemorySyncService {
     }
 
     /**
+     * Uploads or overwrites a file inside `/AI_OS_Memory/<subFolderName>` via a user-configured
+     * Google Apps Script Web App Bridge URL (`https://script.google.com/macros/s/.../exec`),
+     * enabling 100% zero-OAuth-popup automatic Drive sync even if GCP OAuth is not used.
+     */
+    private fun uploadViaAppsScriptBridgeIfConfigured(
+        appCtx: Context,
+        fileName: String,
+        mimeType: String,
+        subFolderName: String,
+        description: String,
+        snippetText: String,
+        nowFmt: String,
+        bytes: ByteArray
+    ): String {
+        val scriptUrl = _state.value.customAppsScriptUrl.trim().ifBlank {
+            appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_CUSTOM_APPS_SCRIPT_URL, "")
+                .orEmpty()
+                .trim()
+        }
+        if (!scriptUrl.startsWith("https://script.google.com/")) return ""
+        return try {
+            val payload = JSONObject().apply {
+                put("action", "UPLOAD_OR_UPDATE")
+                put("folderName", AI_OS_MEMORY_FOLDER_NAME)
+                put("subFolderName", subFolderName)
+                put("fileName", fileName)
+                put("mimeType", mimeType)
+                put("description", description)
+                put("base64Data", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            }
+            val req = Request.Builder()
+                .url(scriptUrl)
+                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+            var uploadedId = ""
+            var webLink = ""
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (bodyStr.trimStart().startsWith("{")) {
+                        val obj = JSONObject(bodyStr)
+                        uploadedId = obj.optString("id")
+                        webLink = obj.optString("webViewLink")
+                    }
+                }
+            }
+            if (uploadedId.isNotBlank()) {
+                val cloudItem = DriveCloudMemoryItem(
+                    fileId = uploadedId,
+                    name = fileName,
+                    mimeType = mimeType,
+                    description = description,
+                    createdTime = nowFmt,
+                    snippetText = snippetText,
+                    webViewLink = webLink,
+                    subFolderName = subFolderName
+                )
+                synchronized(inMemoryCloudIndex) {
+                    inMemoryCloudIndex.removeAll { it.fileId == uploadedId || it.name == fileName }
+                    inMemoryCloudIndex.add(0, cloudItem)
+                    if (inMemoryCloudIndex.size > 60) {
+                        inMemoryCloudIndex.removeAt(inMemoryCloudIndex.lastIndex)
+                    }
+                    _state.value = _state.value.copy(
+                        isConnected = true,
+                        isCloudApiVerified = true,
+                        recentCloudFiles = inMemoryCloudIndex.take(15)
+                    )
+                }
+                persistCloudIndexToPrefs(appCtx)
+            }
+            uploadedId
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
      * Streams a large file (such as a multi-MB `.zip` package) directly from disk to Google Drive REST API v3
      * using `sourceFile.asRequestBody()` so large MB uploads never load the entire file into RAM.
      */
@@ -2266,6 +2543,21 @@ object GoogleDriveMemorySyncService {
         persistCloudIndexToPrefs(appCtx)
 
         var token = resolveAccessToken(appCtx, allowInteractiveRecovery = false)
+        if (token.isBlank() && sourceFile.length() <= 18L * 1024L * 1024L) {
+            val scriptId = runCatching {
+                uploadViaAppsScriptBridgeIfConfigured(
+                    appCtx = appCtx,
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    subFolderName = cleanSub,
+                    description = description,
+                    snippetText = snippetText,
+                    nowFmt = nowFmt,
+                    bytes = sourceFile.readBytes()
+                )
+            }.getOrDefault("")
+            if (scriptId.isNotBlank()) return@withContext scriptId
+        }
         if (token.isBlank()) {
             return@withContext fallbackId
         }

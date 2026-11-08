@@ -452,8 +452,19 @@ fun AgentCommandScreen(
                     onSpeakStatus = onSpeakText
                 )
 
-                // 2C. 5TB Google Drive ('AI_OS_Memory') Quick Connect & Zero-Storage Status Bar
+                // 2C. 5TB Google Drive ('AI_OS_Memory') Quick Connect, Live Cloud Brain & Custom API / Script Slot
                 val driveSyncState by com.example.service.GoogleDriveMemorySyncService.state.collectAsState()
+                var showDriveApiSetupDialog by remember { mutableStateOf(false) }
+                var customDriveTokenInput by remember(driveSyncState.customAccessToken) {
+                    mutableStateOf(driveSyncState.customAccessToken)
+                }
+                var customDriveFolderIdInput by remember(driveSyncState.driveFolderId) {
+                    mutableStateOf(driveSyncState.driveFolderId)
+                }
+                var customAppsScriptUrlInput by remember(driveSyncState.customAppsScriptUrl) {
+                    mutableStateOf(driveSyncState.customAppsScriptUrl)
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -471,98 +482,242 @@ fun AgentCommandScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = if (driveSyncState.isConnected) {
-                                "☁️ 5TB Drive: ${driveSyncState.linkedEmail} (/${driveSyncState.driveFolderName} • ৬ সাব-ফোল্ডার)"
+                                "☁️ 5TB Drive Brain: ${driveSyncState.linkedEmail} (/${driveSyncState.driveFolderName})"
                             } else {
-                                "☁️ 5TB Google Drive (/AI_OS_Memory) • মেইন স্টোরেজ ১০০% ফ্রি"
+                                "☁️ 5TB Google Drive (/AI_OS_Memory) • কানেক্ট করুন বা API বসান"
                             },
                             color = if (driveSyncState.isConnected) MatrixGreen else CyberCyan,
-                            fontSize = 11.sp,
+                            fontSize = 10.8.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = if (driveSyncState.isConnected) {
-                                "জিরো-ক্লিক অটো-সিঙ্ক সচল: মেমোরি ${driveSyncState.backedUpMemoriesCount} • চ্যাট ${driveSyncState.backedUpConversationsCount} • কোড/ফাইল ${driveSyncState.backedUpScreenshotsAndFilesCount} • ZIP ${driveSyncState.backedUpZipPackagesCount}"
+                                "অটো-সিঙ্ক ও লাইভ ব্রেইন সচল: মেমোরি ${driveSyncState.backedUpMemoriesCount} • চ্যাট ${driveSyncState.backedUpConversationsCount} • কোড ${driveSyncState.backedUpScreenshotsAndFilesCount} • ZIP ${driveSyncState.backedUpZipPackagesCount}"
                             } else {
-                                "SQLite ফাস্ট স্টার্টআপ + 5TB ক্লাউড অটো-ব্যাকআপ চালু করতে Gmail যুক্ত করুন"
+                                driveSyncState.lastSyncStatusBn
                             },
                             color = Color(0xFFB5D8CC),
-                            fontSize = 9.5.sp,
+                            fontSize = 9.2.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    if (driveSyncState.isConnected) {
-                        Button(
-                            onClick = {
-                                com.example.service.GoogleDriveMemorySyncService.triggerFullSyncFromUi(
-                                    context = context,
-                                    onStatusSpoken = onSpeakText
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (driveSyncState.isConnected) {
+                            Button(
+                                onClick = {
+                                    com.example.service.GoogleDriveMemorySyncService.triggerFullSyncFromUi(
+                                        context = context,
+                                        onStatusSpoken = onSpeakText
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = CyberCyan,
+                                    contentColor = Color.Black
+                                ),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("main_sync_all_drive_button")
+                            ) {
+                                Text(
+                                    text = if (driveSyncState.isSyncing) "⏳..." else "🔄 Sync",
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = CyberCyan,
-                                contentColor = Color.Black
-                            ),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier
-                                .height(32.dp)
-                                .testTag("main_sync_all_drive_button")
-                        ) {
-                            Text(
-                                text = if (driveSyncState.isSyncing) "⏳ Sync..." else "🔄 Sync All",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
+                            }
+                            Button(
+                                onClick = {
+                                    com.example.service.GoogleDriveMemorySyncService.openOrShareToGoogleDriveApp(
+                                        context = context,
+                                        onStatusSpoken = onSpeakText
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MatrixGreen,
+                                    contentColor = Color.Black
+                                ),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("main_open_google_drive_app_button")
+                            ) {
+                                Text(
+                                    text = "📂 Drive",
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(
+                                        context = context,
+                                        onStatusSpoken = onSpeakText
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = CyberCyan,
+                                    contentColor = Color.Black
+                                ),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .height(32.dp)
+                                    .testTag("main_connect_google_drive_button")
+                            ) {
+                                Text(
+                                    text = "☁️ Connect",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
                         }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Button(
-                            onClick = {
-                                com.example.service.GoogleDriveMemorySyncService.openOrShareToGoogleDriveApp(
-                                    context = context,
-                                    onStatusSpoken = onSpeakText
-                                )
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MatrixGreen,
-                                contentColor = Color.Black
-                            ),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+
+                        OutlinedButton(
+                            onClick = { showDriveApiSetupDialog = true },
+                            border = BorderStroke(1.dp, MatrixGreen.copy(alpha = 0.8f)),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp),
                             modifier = Modifier
-                                .height(32.dp)
-                                .testTag("main_open_google_drive_app_button")
+                                .height(30.dp)
+                                .testTag("main_drive_api_setup_button")
                         ) {
                             Text(
-                                text = "📤 Drive",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-                    } else {
-                        Button(
-                            onClick = {
-                                com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(
-                                    context = context,
-                                    onStatusSpoken = onSpeakText
-                                )
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = CyberCyan,
-                                contentColor = Color.Black
-                            ),
-                            modifier = Modifier
-                                .height(34.dp)
-                                .testTag("main_connect_google_drive_button")
-                        ) {
-                            Text(
-                                text = "Connect Google Drive",
-                                fontSize = 10.5.sp,
+                                text = "🔑 API",
+                                color = MatrixGreen,
+                                fontSize = 9.5.sp,
                                 fontWeight = FontWeight.ExtraBold
                             )
                         }
                     }
+                }
+
+                if (showDriveApiSetupDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showDriveApiSetupDialog = false },
+                        containerColor = Color(0xFF0B192C),
+                        title = {
+                            Text(
+                                text = "☁️ 5TB Google Drive API ও লাইভ ক্লাউড ব্রেইন সেটআপ",
+                                color = MatrixGreen,
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        },
+                        text = {
+                            Column(
+                                modifier = Modifier.verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "স্যার, এই AI-এর সমস্ত মেমোরি, আগের কথোপকথন ও ভয়েস প্রোফাইল `/AI_OS_Memory` ফোল্ডারে স্বয়ংক্রিয়ভাবে সেভ ও রিস্টোর হয়। আপনি সরাসরি Google Sign-In করতে পারেন অথবা নিচে আপনার Drive OAuth Token / Folder ID / Apps Script Web App URL বসাতে পারেন:",
+                                    color = Color(0xFFD7F7EA),
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+
+                                OutlinedTextField(
+                                    value = customDriveFolderIdInput,
+                                    onValueChange = { customDriveFolderIdInput = it },
+                                    label = { Text("📁 Google Drive Folder ID বা লিংক (ঐচ্ছিক)", color = CyberCyan, fontSize = 10.5.sp) },
+                                    placeholder = { Text("https://drive.google.com/drive/folders/...", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("drive_custom_folder_id_input")
+                                )
+
+                                OutlinedTextField(
+                                    value = customDriveTokenInput,
+                                    onValueChange = { customDriveTokenInput = it },
+                                    label = { Text("🔑 Google Drive OAuth Access Token (ya29... ঐচ্ছিক)", color = MatrixGreen, fontSize = 10.5.sp) },
+                                    placeholder = { Text("ya29.a0AfH6SM...", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("drive_custom_token_input")
+                                )
+
+                                OutlinedTextField(
+                                    value = customAppsScriptUrlInput,
+                                    onValueChange = { customAppsScriptUrlInput = it },
+                                    label = { Text("⚡ Google Apps Script Web App URL (পপআপ ছাড়া ১০০% অটো-ড্রাইভ)", color = Color(0xFFFBBF24), fontSize = 10.5.sp) },
+                                    placeholder = { Text("https://script.google.com/macros/s/.../exec", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("drive_custom_apps_script_input")
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            val scriptCode = com.example.service.GoogleDriveMemorySyncService.getReadyToPasteAppsScriptCode()
+                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            cm.setPrimaryClip(android.content.ClipData.newPlainText("AI_OS_Drive_Bridge", scriptCode))
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "✓ Apps Script কোড কপি হয়েছে! script.google.com-এ পেস্ট করে Web App URL এখানে দিন।",
+                                                android.widget.Toast.LENGTH_LONG
+                                            ).show()
+                                        },
+                                        border = BorderStroke(1.dp, Color(0xFFFBBF24)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("📋 Apps Script কোড কপি", color = Color(0xFFFBBF24), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(
+                                                context = context,
+                                                onStatusSpoken = onSpeakText
+                                            )
+                                            showDriveApiSetupDialog = false
+                                        },
+                                        border = BorderStroke(1.dp, CyberCyan),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("☁️ Gmail সাইন-ইন", color = CyberCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    com.example.service.GoogleDriveMemorySyncService.saveCustomDriveApiConfig(
+                                        context = context,
+                                        customAccessTokenOrKey = customDriveTokenInput,
+                                        customFolderIdOrUrl = customDriveFolderIdInput,
+                                        customAppsScriptBridgeUrl = customAppsScriptUrlInput,
+                                        onStatusSpoken = onSpeakText
+                                    )
+                                    showDriveApiSetupDialog = false
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MatrixGreen,
+                                    contentColor = Color.Black
+                                ),
+                                modifier = Modifier.testTag("save_drive_api_config_button")
+                            ) {
+                                Text("✅ সেভ ও অটো-সিঙ্ক চালু", fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showDriveApiSetupDialog = false }) {
+                                Text("বন্ধ করুন", color = Color(0xFF94A3B8))
+                            }
+                        }
+                    )
                 }
 
                 // 3. Exact Neon-Green Rounded TRANSCRIPT Box (ARCHER on Left | YOU on Right)
@@ -2349,6 +2504,7 @@ private fun VoiceBiometricsHudPillBar(
 ) {
     val context = LocalContext.current
     val bioState by com.example.service.VoiceBiometricsEngine.state.collectAsState()
+    var showBossCalibrationDialog by remember { mutableStateOf(false) }
     var showGuestEnrollDialog by remember { mutableStateOf(false) }
     var guestNameInput by remember { mutableStateOf("") }
 
@@ -2387,19 +2543,23 @@ private fun VoiceBiometricsHudPillBar(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                val activeProfileStyle = bioState.enrolledProfiles
+                    .firstOrNull { it.speakerName == bioState.activeSpeakerName }
+                    ?.speakingStyleSummaryBn
+                    .orEmpty()
                 Text(
                     text = buildString {
-                        append("কণ্ঠ: ${bioState.detectedGender.labelBn} (${bioState.detectedGender.labelEn})")
+                        append("কণ্ঠ: ${bioState.detectedGender.labelBn}")
                         if (bioState.currentPitchHz > 0) {
                             append(" • ${bioState.currentPitchHz}Hz")
                         }
-                        append(" • প্রোফাইল: ${bioState.enrolledProfiles.size}টি (5TB Drive)")
-                        if (bioState.hasOwnerBossProfile) {
-                            append(if (bioState.isVoiceSecurityLockEnabled) " • 🔒 সিকিউরিটি লক ON" else " • 🔓 লক OFF")
+                        if (activeProfileStyle.isNotBlank()) {
+                            append(" • ধরন: $activeProfileStyle")
                         }
+                        append(" • প্রোফাইল: ${bioState.enrolledProfiles.size}টি")
                     },
                     color = Color(0xFF94A3B8),
-                    fontSize = 9.5.sp,
+                    fontSize = 9.3.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -2412,15 +2572,7 @@ private fun VoiceBiometricsHudPillBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    onClick = {
-                        com.example.service.VoiceBiometricsEngine.startFiveSecondVoiceEnrollment(
-                            context = context,
-                            speakerName = "বস",
-                            isOwnerBoss = true,
-                            onComplete = { msg -> onSpeakStatus(msg) }
-                        )
-                    },
-                    enabled = !bioState.isEnrolling,
+                    onClick = { showBossCalibrationDialog = true },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (bioState.hasOwnerBossProfile) MatrixGreen else Color(0xFF38BDF8),
                         contentColor = Color.Black
@@ -2432,11 +2584,11 @@ private fun VoiceBiometricsHudPillBar(
                 ) {
                     Text(
                         text = if (bioState.isEnrolling && bioState.enrollmentIsOwnerBoss) {
-                            "⏳ ${bioState.enrollmentProgressPercent}%"
+                            "⏳ ধাপ ${bioState.enrollmentStepIndex + 1}/৩ (${bioState.enrollmentProgressPercent}%)"
                         } else if (bioState.hasOwnerBossProfile) {
-                            "🔒 বসের ভয়েস আপডেট"
+                            "🎙️ বসের ভয়েস ট্রেনিং"
                         } else {
-                            "🔒 বসের ভয়েস লক (5s)"
+                            "🔒 বসের ভয়েস লক"
                         },
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.ExtraBold
@@ -2445,7 +2597,6 @@ private fun VoiceBiometricsHudPillBar(
 
                 OutlinedButton(
                     onClick = { showGuestEnrollDialog = true },
-                    enabled = !bioState.isEnrolling,
                     border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.7f)),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp),
                     modifier = Modifier
@@ -2453,13 +2604,23 @@ private fun VoiceBiometricsHudPillBar(
                         .testTag("enroll_guest_voice_button")
                 ) {
                     Text(
-                        text = "➕ কণ্ঠ সেভ",
+                        text = "➕ বক্তা (${bioState.enrolledProfiles.size})",
                         color = Color(0xFF38BDF8),
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
+        }
+
+        if (bioState.isEnrolling && bioState.currentCalibrationSentenceBn.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "🗣️ এখন বলুন (ধাপ ${bioState.enrollmentStepIndex + 1}/৩): \"${bioState.currentCalibrationSentenceBn}\"",
+                color = Color(0xFFFBBF24),
+                fontSize = 10.2.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
         }
 
         if (bioState.lastSecurityGateEventBn.isNotBlank()) {
@@ -2475,24 +2636,163 @@ private fun VoiceBiometricsHudPillBar(
         }
     }
 
+    if (showBossCalibrationDialog) {
+        AlertDialog(
+            onDismissRequest = { showBossCalibrationDialog = false },
+            containerColor = Color(0xFF0F172A),
+            title = {
+                Text(
+                    text = "🎙️ স্যার/বসের মেইন ভয়েস লক ও ৩-বাক্য ক্যালিব্রেশন",
+                    color = MatrixGreen,
+                    fontSize = 14.5.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "নিচের বাটনে ট্যাপ করে এই ৩টি বাক্য বা ওয়ার্ডগুলো স্বাভাবিক গলায় বলুন। সিস্টেম আপনার মেইন কণ্ঠস্বর, পিচ (${bioState.currentPitchHz}Hz) ও কথা বলার ধরন চিনে নেবে:",
+                        color = Color(0xFFCBD5E1),
+                        fontSize = 11.2.sp,
+                        lineHeight = 15.sp
+                    )
+
+                    com.example.service.VoiceBiometricsEngine.BOSS_CALIBRATION_SENTENCES.forEachIndexed { idx, sentence ->
+                        val isCurrentStep = bioState.isEnrolling && bioState.enrollmentStepIndex == idx
+                        Surface(
+                            color = if (isCurrentStep) Color(0xFF1E3A2F) else Color(0xFF1E293B),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                width = if (isCurrentStep) 1.5.dp else 1.dp,
+                                color = if (isCurrentStep) MatrixGreen else Color(0xFF334155)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                Text(
+                                    text = "বাক্য ${idx + 1}:",
+                                    color = if (isCurrentStep) MatrixGreen else CyberCyan,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = "\"$sentence\"",
+                                    color = Color.White,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "🔑 ক্যালিব্রেশন ওয়ার্ডসমূহ: ${com.example.service.VoiceBiometricsEngine.BOSS_CALIBRATION_KEYWORDS.joinToString(" • ")}",
+                        color = CyberCyan,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    if (bioState.isEnrolling) {
+                        Surface(
+                            color = Color(0xFF1E293B),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, Color(0xFFFBBF24)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "🎙️ কণ্ঠের সিগন্যাল শোনা হচ্ছে: ${bioState.enrollmentProgressPercent}% (পিচ: ${bioState.currentPitchHz}Hz)",
+                                    color = Color(0xFFFBBF24),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color(0xFF0F172A))
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(bioState.liveVoiceRmsLevel.coerceIn(0.08f, 1f))
+                                            .height(8.dp)
+                                            .background(MatrixGreen)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "🤖 অটো-গেস্ট লার্নিং চালু আছে: অন্য কেউ কথা বললে AI আগে তার নাম জিজ্ঞেস করবে এবং নাম বললেই তার কণ্ঠ ও কথা বলার সব ধরন স্বয়ংক্রিয়ভাবে চিনে Google Drive-এ সেভ করে নেবে!",
+                        color = Color(0xFFA7F3D0),
+                        fontSize = 10.2.sp,
+                        lineHeight = 14.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        com.example.service.VoiceBiometricsEngine.startFiveSecondVoiceEnrollment(
+                            context = context,
+                            speakerName = "বস",
+                            isOwnerBoss = true,
+                            onComplete = { msg ->
+                                onSpeakStatus(msg)
+                            }
+                        )
+                    },
+                    enabled = !bioState.isEnrolling,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MatrixGreen,
+                        contentColor = Color.Black
+                    ),
+                    modifier = Modifier.testTag("start_boss_guided_calibration_button")
+                ) {
+                    Text(
+                        text = if (bioState.isEnrolling) "⏳ কণ্ঠ শোনা হচ্ছে (${bioState.enrollmentProgressPercent}%)..." else "🎙️ এখন আমার কণ্ঠ চিনে নাও (Start)",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 11.5.sp
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBossCalibrationDialog = false }) {
+                    Text("বন্ধ করুন", color = Color(0xFF94A3B8))
+                }
+            }
+        )
+    }
+
     if (showGuestEnrollDialog) {
         AlertDialog(
             onDismissRequest = { showGuestEnrollDialog = false },
             containerColor = Color(0xFF1E293B),
             title = {
                 Text(
-                    text = "🎙️ নতুন বক্তার কণ্ঠ সেভ ও ভয়েস লক",
+                    text = "🎙️ পরিচিত বক্তার তালিকা ও নতুন কণ্ঠ সেভ",
                     color = Color.White,
-                    fontSize = 15.sp,
+                    fontSize = 14.5.sp,
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Text(
-                        text = "বন্ধু বা পরিবারের কারো নাম লিখে ৫ সেকেন্ড কথা বলতে বলুন। তার ভয়েস প্রিন্ট স্বয়ংক্রিয়ভাবে `/AI_OS_5TB_Core/Voice_Profiles/`-এ সেভ হয়ে যাবে।",
+                        text = "অন্য কেউ কথা বলার সময় শুধু নিজের নাম বললেই (যেমন: 'আমার নাম সিয়াম') AI নিজে থেকেই তার কণ্ঠ ও কথা বলার ধরন চিনে নেয়! এছাড়া নিচে নাম লিখে ম্যানুয়ালিও সেভ করতে পারেন:",
                         color = Color(0xFFCBD5E1),
-                        fontSize = 12.sp
+                        fontSize = 11.2.sp
                     )
                     OutlinedTextField(
                         value = guestNameInput,
@@ -2505,7 +2805,7 @@ private fun VoiceBiometricsHudPillBar(
                     )
                     if (bioState.enrolledProfiles.isNotEmpty()) {
                         Text(
-                            text = "সেভ করা ভয়েস প্রিন্টসমূহ (${bioState.enrolledProfiles.size}):",
+                            text = "সেভ করা ভয়েস প্রিন্ট ও কথা বলার ধরন (${bioState.enrolledProfiles.size}):",
                             color = Color(0xFF38BDF8),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -2516,11 +2816,20 @@ private fun VoiceBiometricsHudPillBar(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "• ${prof.speakerName} (${prof.gender.labelBn}/${prof.gender.labelEn} • ${prof.meanPitchHz.toInt()}Hz)",
-                                    color = Color.White,
-                                    fontSize = 11.sp
-                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "• ${prof.speakerName} (${prof.gender.labelBn} • ${prof.meanPitchHz.toInt()}Hz)",
+                                        color = if (prof.isOwnerBoss) MatrixGreen else Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "ধরন: ${prof.speakingStyleSummaryBn}" +
+                                            if (prof.signatureWords.isNotEmpty()) " | শব্দ: ${prof.signatureWords.take(4).joinToString(", ")}" else "",
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 9.5.sp
+                                    )
+                                }
                                 TextButton(
                                     onClick = {
                                         com.example.service.VoiceBiometricsEngine.deleteVoiceProfile(context, prof.id)
@@ -2571,7 +2880,7 @@ private fun VoiceBiometricsHudPillBar(
                     ),
                     modifier = Modifier.testTag("confirm_enroll_guest_voice_button")
                 ) {
-                    Text("🎙️ ৫ সেকেন্ড কণ্ঠ রেকর্ড করুন", fontWeight = FontWeight.ExtraBold)
+                    Text("🎙️ কণ্ঠ রেকর্ড ও সেভ করুন", fontWeight = FontWeight.ExtraBold)
                 }
             },
             dismissButton = {

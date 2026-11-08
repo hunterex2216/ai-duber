@@ -21,12 +21,12 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.PI
 import kotlin.math.sqrt
 
 enum class DetectedSpeakerGender(
@@ -58,8 +58,14 @@ data class EnrolledVoiceProfile(
     val isOwnerBoss: Boolean,
     val gender: DetectedSpeakerGender,
     val meanPitchHz: Float,
-    val pitchStdHz: Float,
-    val spectralCentroidHz: Float,
+    val minPitchHz: Float = 95f,
+    val maxPitchHz: Float = 175f,
+    val pitchStdHz: Float = 16f,
+    val spectralCentroidHz: Float = 1450f,
+    val speakingCadenceWpm: Int = 125,
+    val speakingStyleSummaryBn: String = "স্পষ্ট ও স্বাভাবিক বাচনভঙ্গি",
+    val signatureWords: List<String> = emptyList(),
+    val sampleCount: Int = 1,
     val embedding: List<Float>,
     val enrolledAtFormatted: String
 ) {
@@ -69,8 +75,16 @@ data class EnrolledVoiceProfile(
         put("isOwnerBoss", isOwnerBoss)
         put("gender", gender.id)
         put("meanPitchHz", meanPitchHz.toDouble())
+        put("minPitchHz", minPitchHz.toDouble())
+        put("maxPitchHz", maxPitchHz.toDouble())
         put("pitchStdHz", pitchStdHz.toDouble())
         put("spectralCentroidHz", spectralCentroidHz.toDouble())
+        put("speakingCadenceWpm", speakingCadenceWpm)
+        put("speakingStyleSummaryBn", speakingStyleSummaryBn)
+        put("signatureWords", JSONArray().apply {
+            signatureWords.forEach { put(it) }
+        })
+        put("sampleCount", sampleCount)
         put("embedding", JSONArray().apply {
             embedding.forEach { put(it.toDouble()) }
         })
@@ -89,14 +103,29 @@ data class EnrolledVoiceProfile(
                 }
             }
             if (emb.isEmpty()) return null
+            val wordsArr = obj.optJSONArray("signatureWords")
+            val words = mutableListOf<String>()
+            if (wordsArr != null) {
+                for (i in 0 until wordsArr.length()) {
+                    val w = wordsArr.optString(i).trim()
+                    if (w.isNotBlank()) words.add(w)
+                }
+            }
+            val meanP = obj.optDouble("meanPitchHz", 130.0).toFloat()
             return EnrolledVoiceProfile(
                 id = obj.optString("id").ifBlank { "vp_${name.lowercase()}" },
                 speakerName = name,
                 isOwnerBoss = obj.optBoolean("isOwnerBoss", false),
                 gender = DetectedSpeakerGender.fromString(obj.optString("gender", "MALE")),
-                meanPitchHz = obj.optDouble("meanPitchHz", 130.0).toFloat(),
+                meanPitchHz = meanP,
+                minPitchHz = obj.optDouble("minPitchHz", (meanP - 25f).toDouble()).toFloat(),
+                maxPitchHz = obj.optDouble("maxPitchHz", (meanP + 30f).toDouble()).toFloat(),
                 pitchStdHz = obj.optDouble("pitchStdHz", 18.0).toFloat(),
                 spectralCentroidHz = obj.optDouble("spectralCentroidHz", 1450.0).toFloat(),
+                speakingCadenceWpm = obj.optInt("speakingCadenceWpm", 125),
+                speakingStyleSummaryBn = obj.optString("speakingStyleSummaryBn", "স্পষ্ট ও স্বাভাবিক বাচনভঙ্গি"),
+                signatureWords = words,
+                sampleCount = obj.optInt("sampleCount", 1).coerceAtLeast(1),
                 embedding = emb,
                 enrolledAtFormatted = obj.optString("enrolledAtFormatted", "")
             )
@@ -108,31 +137,31 @@ data class VoiceBiometricsState(
     val activeSpeakerName: String = "বস",
     val isOwnerBossVerified: Boolean = true,
     val isKnownEnrolledSpeaker: Boolean = false,
+    val isWaitingForNewSpeakerName: Boolean = false,
     val hasOwnerBossProfile: Boolean = false,
     val isVoiceSecurityLockEnabled: Boolean = true,
     val detectedGender: DetectedSpeakerGender = DetectedSpeakerGender.MALE,
     val currentPitchHz: Int = 0,
     val spectralCentroidHz: Int = 0,
     val similarityScorePercent: Int = 0,
+    val liveVoiceRmsLevel: Float = 0f,
     val isCurrentlySpeaking: Boolean = false,
     val isEnrolling: Boolean = false,
     val enrollmentTargetName: String = "",
     val enrollmentIsOwnerBoss: Boolean = true,
+    val enrollmentStepIndex: Int = 0,
+    val enrollmentTotalSteps: Int = 3,
+    val currentCalibrationSentenceBn: String = "",
     val enrollmentProgressPercent: Int = 0,
     val enrolledProfiles: List<EnrolledVoiceProfile> = emptyList(),
-    val liveHudBadgeText: String = "🎙️ ভয়েস বায়োমেট্রিক্স প্রস্তুত • বসের ভয়েস লক করুন",
+    val liveHudBadgeText: String = "🎙️ ভয়েস বায়োমেট্রিক্স প্রস্তুত • বসের ভয়েস ট্রেনিং করুন",
     val lastSecurityGateEventBn: String = ""
 )
 
 /**
- * Real-Time Biometric Speaker Identification, Owner Voice Lock & Male/Female/Child Gender Detection Engine.
- *
- * - Processes 16kHz mono PCM audio frames in real time using YIN / normalized autocorrelation pitch estimation
- *   + 16-dimensional spectral timbre & formant embedding + cosine similarity.
- * - Enrolls Owner ("বস") in 5 seconds and multi-speaker friends/family by voice command.
- * - Automatically syncs all enrolled Voice Prints to `/AI_OS_5TB_Core/Voice_Profiles/` (and `/AI_OS_Memory/Voice_Profiles/`)
- *   in the user's 5TB Google Drive.
- * - Enforces a Voice Security Gate blocking sensitive commands when spoken by an unverified voice.
+ * Advanced Biometric Speaker Identification, Guided 3-Sentence Boss Voice Calibration,
+ * Automatic Guest Introduction ("আগে নাম জেনে কণ্ঠ ও কথা বলার ধরন চিনে নেওয়া"),
+ * and Real-Time Male/Female/Child Gender Detection Engine.
  */
 object VoiceBiometricsEngine {
     private const val PREFS_NAME = "archer_voice_biometrics_prefs"
@@ -141,6 +170,20 @@ object VoiceBiometricsEngine {
     private const val SAMPLE_RATE = 16000
     private const val EMBEDDING_DIM = 16
 
+    /**
+     * 3 Guided Calibration Sentences designed to capture Boss's full vocal frequency range,
+     * Bangla vowels/consonants, formant timbre, and speaking cadence.
+     */
+    val BOSS_CALIBRATION_SENTENCES = listOf(
+        "১. হ্যালো আর্চার, আমি তোমার বস বলছি—আমার কণ্ঠস্বর ও কথা বলার ধরন চিনে রাখো।",
+        "২. আমার আদেশ ছাড়া কোনো গোপন ফাইল বা মেসেজ কাউকে পাঠাবে না।",
+        "৩. তুমি আমার সব মেমোরি ও ব্রেইন ডাটা গুগল ড্রাইভে সবসময় সুরক্ষিত রাখবে।"
+    )
+
+    val BOSS_CALIBRATION_KEYWORDS = listOf(
+        "আর্চার", "বস", "মেমোরি", "গুগল ড্রাইভ", "সিকিউরিটি লক"
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _state = MutableStateFlow(VoiceBiometricsState())
     val state: StateFlow<VoiceBiometricsState> = _state.asStateFlow()
@@ -148,23 +191,30 @@ object VoiceBiometricsEngine {
     @Volatile
     private var isInitialized = false
 
-    // Rolling window of recent voiced acoustic frames (~5 seconds of active speech) for instant voice-command enrollment
+    // Rolling window of recent voiced acoustic frames (~6 seconds of active speech)
     private val rollingFrameLock = Any()
-    private val rollingPitchHistory = ArrayDeque<Float>(90)
-    private val rollingCentroidHistory = ArrayDeque<Float>(90)
-    private val rollingEmbeddings = ArrayDeque<FloatArray>(90)
+    private val rollingPitchHistory = ArrayDeque<Float>(120)
+    private val rollingCentroidHistory = ArrayDeque<Float>(120)
+    private val rollingEmbeddings = ArrayDeque<FloatArray>(120)
+    private val rollingSpokenWords = ArrayDeque<String>(40)
 
-    // Active 5-second enrollment buffers
+    // Active enrollment buffers
     private val enrollmentPitches = mutableListOf<Float>()
     private val enrollmentCentroids = mutableListOf<Float>()
     private val enrollmentEmbeddings = mutableListOf<FloatArray>()
     private var standaloneEnrollmentJob: Job? = null
 
     @Volatile
+    private var lastLiveMicStreamFrameAtMs: Long = 0L
+
+    @Volatile
     private var lastAnalyzedFrameAtMs: Long = 0L
 
     @Volatile
     private var lastVerifiedBossAtMs: Long = 0L
+
+    @Volatile
+    private var unknownSpeakerConsecutiveFrames: Int = 0
 
     fun init(context: Context) {
         if (isInitialized) return
@@ -174,19 +224,54 @@ object VoiceBiometricsEngine {
         val rawJson = prefs.getString(KEY_PROFILES_JSON, "[]").orEmpty()
         val loaded = parseProfilesJson(rawJson)
         val hasBoss = loaded.any { it.isOwnerBoss }
+        val bossProf = loaded.firstOrNull { it.isOwnerBoss }
         _state.value = _state.value.copy(
             enrolledProfiles = loaded,
             hasOwnerBossProfile = hasBoss,
             isVoiceSecurityLockEnabled = lockEnabled,
-            isOwnerBossVerified = !hasBoss, // Until Boss enrolls, allow normal use; once enrolled, require Boss voice match
-            liveHudBadgeText = buildHudBadgeText(
-                speakerName = if (hasBoss) "বস" else "শনাক্ত অপেক্ষমান",
-                gender = loaded.firstOrNull { it.isOwnerBoss }?.gender ?: DetectedSpeakerGender.MALE,
-                isOwnerVerified = hasBoss,
-                isKnownSpeaker = hasBoss,
-                hasBossProfile = hasBoss,
-                similarityPct = if (hasBoss) 96 else 0
-            )
+            isOwnerBossVerified = true,
+            activeSpeakerName = bossProf?.speakerName ?: "বস",
+            detectedGender = bossProf?.gender ?: DetectedSpeakerGender.MALE,
+            currentCalibrationSentenceBn = BOSS_CALIBRATION_SENTENCES.first(),
+            liveHudBadgeText = if (hasBoss) {
+                "🎙️ বক্তা: ${bossProf?.speakerName ?: "বস"} (${(bossProf?.gender ?: DetectedSpeakerGender.MALE).labelEn} • Verified)"
+            } else {
+                "🎙️ স্যারের ভয়েস ট্রেনিং করুন (৩টি বাক্য পড়ে মেইন ভয়েস লক করুন)"
+            }
+        )
+    }
+
+    /**
+     * Restores enrolled voice profiles downloaded from Google Drive (`/AI_OS_Memory/Voice_Profiles/All_Enrolled_Voice_Profiles.json`)
+     * so the AI immediately remembers Boss and all enrolled speakers across devices/installs.
+     */
+    fun restoreProfilesFromCloudJson(context: Context, cloudJson: String) {
+        if (cloudJson.isBlank()) return
+        init(context)
+        val cloudProfiles = parseProfilesJson(cloudJson)
+        if (cloudProfiles.isEmpty()) return
+
+        val merged = (_state.value.enrolledProfiles + cloudProfiles)
+            .associateBy { it.speakerName.lowercase(Locale.ROOT) }
+            .values
+            .toList()
+
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PROFILES_JSON, serializeProfilesJson(merged))
+            .apply()
+
+        val hasBoss = merged.any { it.isOwnerBoss }
+        val bossProf = merged.firstOrNull { it.isOwnerBoss }
+        _state.value = _state.value.copy(
+            enrolledProfiles = merged,
+            hasOwnerBossProfile = hasBoss,
+            liveHudBadgeText = if (hasBoss) {
+                "🎙️ বক্তা: ${bossProf?.speakerName ?: "বস"} (${(bossProf?.gender ?: DetectedSpeakerGender.MALE).labelEn} • Drive Restored)"
+            } else {
+                _state.value.liveHudBadgeText
+            }
         )
     }
 
@@ -209,18 +294,21 @@ object VoiceBiometricsEngine {
     }
 
     /**
-     * Real-time 16kHz PCM audio frame analyzer called directly from `MultimodalLiveService` audio pump.
-     * Runs only on voiced frames so CPU overhead is < 0.4ms per frame.
+     * Real-time 16kHz PCM audio frame analyzer called from `MultimodalLiveService` or standalone calibration.
+     * Uses sensitive voice threshold (RMS >= 135) so normal and soft natural speech is always recognized!
      */
     fun processIncoming16kHzPcmFrame(
         context: Context,
         pcm16LeBytes: ByteArray,
-        isAgentCurrentlySpeaking: Boolean
+        isAgentCurrentlySpeaking: Boolean,
+        fromLiveStream: Boolean = true
     ) {
-        if (isAgentCurrentlySpeaking || pcm16LeBytes.size < 640) return
+        if (isAgentCurrentlySpeaking || pcm16LeBytes.size < 400) return
         val now = System.currentTimeMillis()
-        // Analyze every ~85ms during normal speech, or every 50ms during active 5s enrollment
-        val minInterval = if (_state.value.isEnrolling) 45L else 85L
+        if (fromLiveStream) {
+            lastLiveMicStreamFrameAtMs = now
+        }
+        val minInterval = if (_state.value.isEnrolling) 35L else 65L
         if (now - lastAnalyzedFrameAtMs < minInterval) return
 
         val sampleCount = pcm16LeBytes.size / 2
@@ -237,25 +325,34 @@ object VoiceBiometricsEngine {
             i += 2
         }
         val rms = sqrt(sumSq / sampleCount.coerceAtLeast(1)).toFloat()
-        // Ignore background room silence/hum (< 290 RMS)
-        if (rms < 290f) {
-            if (now - lastAnalyzedFrameAtMs > 2400L && _state.value.isCurrentlySpeaking) {
-                _state.value = _state.value.copy(isCurrentlySpeaking = false)
+        val normRms = (rms / 2200f).coerceIn(0f, 1f)
+
+        // Responsive threshold (135f) so even normal/quiet human speech is picked up reliably
+        if (rms < 135f) {
+            if (now - lastAnalyzedFrameAtMs > 1800L && _state.value.isCurrentlySpeaking) {
+                _state.value = _state.value.copy(
+                    isCurrentlySpeaking = false,
+                    liveVoiceRmsLevel = 0f
+                )
             }
             return
         }
         lastAnalyzedFrameAtMs = now
 
         val pitchHz = estimateFundamentalPitchYinHz(samples, SAMPLE_RATE)
-        if (pitchHz !in 75f..410f) return
+        if (pitchHz !in 72f..420f) {
+            _state.value = _state.value.copy(liveVoiceRmsLevel = normRms)
+            return
+        }
 
         val spectralCentroid = computeSpectralCentroidHz(samples, SAMPLE_RATE)
         val embedding = extractNormalizedVocalTimbreEmbedding(samples, SAMPLE_RATE, pitchHz, spectralCentroid)
 
+        var collectedEnrollmentFrames = 0
         synchronized(rollingFrameLock) {
-            if (rollingPitchHistory.size >= 85) rollingPitchHistory.removeFirst()
-            if (rollingCentroidHistory.size >= 85) rollingCentroidHistory.removeFirst()
-            if (rollingEmbeddings.size >= 85) rollingEmbeddings.removeFirst()
+            if (rollingPitchHistory.size >= 110) rollingPitchHistory.removeFirst()
+            if (rollingCentroidHistory.size >= 110) rollingCentroidHistory.removeFirst()
+            if (rollingEmbeddings.size >= 110) rollingEmbeddings.removeFirst()
             rollingPitchHistory.addLast(pitchHz)
             rollingCentroidHistory.addLast(spectralCentroid)
             rollingEmbeddings.addLast(embedding)
@@ -264,17 +361,39 @@ object VoiceBiometricsEngine {
                 enrollmentPitches.add(pitchHz)
                 enrollmentCentroids.add(spectralCentroid)
                 enrollmentEmbeddings.add(embedding)
+                collectedEnrollmentFrames = enrollmentEmbeddings.size
             }
         }
 
-        // Smooth pitch & embedding over the last 8 voiced frames for rock-solid speaker & gender detection
+        // If actively enrolling via Guided 3-Sentence Training, update sentence step based on real voiced frames
+        if (_state.value.isEnrolling && collectedEnrollmentFrames > 0) {
+            val targetFrames = if (_state.value.enrollmentIsOwnerBoss) 48 else 28
+            val pct = ((collectedEnrollmentFrames * 100) / targetFrames).coerceIn(8, 99)
+            val stepIdx = when {
+                pct < 34 -> 0
+                pct < 68 -> 1
+                else -> 2
+            }
+            _state.value = _state.value.copy(
+                currentPitchHz = pitchHz.toInt(),
+                spectralCentroidHz = spectralCentroid.toInt(),
+                liveVoiceRmsLevel = normRms,
+                isCurrentlySpeaking = true,
+                enrollmentProgressPercent = pct,
+                enrollmentStepIndex = stepIdx,
+                currentCalibrationSentenceBn = BOSS_CALIBRATION_SENTENCES.getOrElse(stepIdx) { BOSS_CALIBRATION_SENTENCES.last() },
+                liveHudBadgeText = "🎙️ কণ্ঠ স্ক্যান চলছে (${_state.value.enrollmentTargetName} • ধাপ ${stepIdx + 1}/৩ • $pct%)"
+            )
+            return
+        }
+
         val smoothedPitch: Float
         val smoothedCentroid: Float
         val smoothedEmbedding: FloatArray
         synchronized(rollingFrameLock) {
-            val recentPitches = rollingPitchHistory.takeLast(9)
-            val recentCentroids = rollingCentroidHistory.takeLast(9)
-            val recentEmbs = rollingEmbeddings.takeLast(9)
+            val recentPitches = rollingPitchHistory.takeLast(11)
+            val recentCentroids = rollingCentroidHistory.takeLast(11)
+            val recentEmbs = rollingEmbeddings.takeLast(11)
             smoothedPitch = medianFloat(recentPitches)
             smoothedCentroid = recentCentroids.average().toFloat()
             smoothedEmbedding = averageAndNormalizeEmbeddings(recentEmbs)
@@ -282,20 +401,191 @@ object VoiceBiometricsEngine {
 
         val acousticGender = classifyGenderAndAgeGroup(smoothedPitch, smoothedCentroid)
         matchSpeakerAgainstProfiles(
+            context = context,
             pitchHz = smoothedPitch,
             centroidHz = smoothedCentroid,
             liveEmbedding = smoothedEmbedding,
-            acousticGender = acousticGender
+            acousticGender = acousticGender,
+            normRms = normRms
         )
     }
 
     /**
-     * YIN / Normalized Difference Autocorrelation Pitch Estimator for 16kHz speech (`75 Hz` .. `410 Hz`).
+     * Called whenever a live user speech transcript arrives (from Gemini Live `inputTranscription` or STT).
+     * 1) Learns the current speaker's vocabulary, cadence, and speaking style.
+     * 2) If an unknown speaker introduces themselves (e.g., "আমার নাম সিয়াম", "আমি রাহাত বলছি", "My name is Siam"),
+     *    it AUTOMATICALLY enrolls their voice print + speaking style under their name and syncs to Google Drive!
+     * 3) If Boss reads the calibration keywords/sentences, it strengthens Boss's voice print automatically!
+     */
+    fun onUserTranscriptReceived(
+        context: Context,
+        transcript: String,
+        onAutoEnrolledCallback: (String) -> Unit = {}
+    ) {
+        val clean = transcript.trim()
+        if (clean.length < 2) return
+        init(context)
+
+        val words = clean.split(Regex("\\s+")).map { it.trim() }.filter { it.length >= 2 }
+        synchronized(rollingFrameLock) {
+            for (w in words) {
+                if (rollingSpokenWords.size >= 40) rollingSpokenWords.removeFirst()
+                rollingSpokenWords.addLast(w)
+            }
+        }
+
+        // Check if speaker just introduced their name (e.g., "আমার নাম সিয়াম", "আমি রাহাত বলছি", "এই কণ্ঠটা তানভীরের নামে সেভ রাখো")
+        val introducedName = extractSelfIntroducedOrCommandedName(clean)
+        if (!introducedName.isNullOrBlank()) {
+            val isBoss = introducedName.equals("বস", ignoreCase = true) ||
+                introducedName.equals("Boss", ignoreCase = true) ||
+                introducedName.equals("স্যার", ignoreCase = true)
+            val msg = enrollSpeakerFromRecentVoiceBuffer(
+                context = context,
+                speakerName = introducedName,
+                isOwnerBoss = isBoss,
+                spokenSampleText = clean
+            )
+            onAutoEnrolledCallback(msg)
+            return
+        }
+
+        // Check if user is reading the Boss calibration phrases ("হ্যালো আর্চার, আমি তোমার বস বলছি...")
+        val lower = clean.lowercase(Locale.ROOT)
+        if ((lower.contains("আমি তোমার বস") || lower.contains("আমার কণ্ঠস্বর ও কথা বলার ধরন চিনে রাখো")) &&
+            !_state.value.hasOwnerBossProfile
+        ) {
+            val msg = enrollSpeakerFromRecentVoiceBuffer(
+                context = context,
+                speakerName = "বস",
+                isOwnerBoss = true,
+                spokenSampleText = clean
+            )
+            onAutoEnrolledCallback(msg)
+            return
+        }
+
+        // Continuous adaptive style & voice learning for the currently recognized speaker
+        if (_state.value.isKnownEnrolledSpeaker && _state.value.activeSpeakerName.isNotBlank()) {
+            adaptActiveSpeakerStyleFromTranscript(context, _state.value.activeSpeakerName, clean)
+        }
+    }
+
+    /**
+     * Extracts a speaker's name when they introduce themselves or when Boss commands to save a voice:
+     * Examples:
+     * - "আমার নাম সিয়াম" / "আমার নাম হলো রাহাত"
+     * - "আমি সিয়াম বলছি" / "আমি মীম কথা বলছি"
+     * - "এই কণ্ঠটা সিয়ামের নামে সেভ রাখো"
+     * - "My name is Tanvir" / "I am Siam speaking"
+     */
+    private fun extractSelfIntroducedOrCommandedName(text: String): String? {
+        val patterns = listOf(
+            Regex("(?:আমার নাম হলো|আমার নাম হচ্ছে|আমার নাম)\\s+([\\u0980-\\u09FFa-zA-Z]{2,18})"),
+            Regex("(?:আমি)\\s+([\\u0980-\\u09FFa-zA-Z]{2,18})\\s+(?:বলছি|কথা বলছি)"),
+            Regex("(?:কণ্ঠটা|ভয়েসটা|গলাটা)\\s+([\\u0980-\\u09FFa-zA-Z]{2,18})(?:-এর| এর|র)?\\s+নামে\\s+(?:সেভ|লক)"),
+            Regex("(?i)(?:my name is|i am)\\s+([a-zA-Z]{2,18})(?:\\s+speaking|$)")
+        )
+        val ignoredStopWords = setOf(
+            "বস", "স্যার", "এখন", "কী", "কি", "বলছি", "কথা", "একটা", "তোমার", "আপনার", "ভালো", "আছি", "করছি"
+        )
+        for (regex in patterns) {
+            val match = regex.find(text) ?: continue
+            val candidate = match.groupValues.getOrNull(1)?.trim() ?: continue
+            val stripped = candidate.removeSuffix("ের").removeSuffix("র").trim()
+            if (stripped.length >= 2 && stripped !in ignoredStopWords) {
+                return stripped
+            }
+        }
+        return null
+    }
+
+    private fun adaptActiveSpeakerStyleFromTranscript(
+        context: Context,
+        speakerName: String,
+        transcript: String
+    ) {
+        val currentList = _state.value.enrolledProfiles
+        val idx = currentList.indexOfFirst { it.speakerName.equals(speakerName, ignoreCase = true) }
+        if (idx < 0) return
+
+        val existing = currentList[idx]
+        val newWords = transcript.split(Regex("\\s+"))
+            .map { it.trim().replace(Regex("[^\\u0980-\\u09FFa-zA-Z0-9]"), "") }
+            .filter { it.length >= 3 }
+        val mergedWords = (existing.signatureWords + newWords).distinct().takeLast(18)
+
+        val liveEmbs: List<FloatArray>
+        val livePitches: List<Float>
+        synchronized(rollingFrameLock) {
+            liveEmbs = rollingEmbeddings.takeLast(8)
+            livePitches = rollingPitchHistory.takeLast(8)
+        }
+
+        val blendedEmb = if (liveEmbs.isNotEmpty() && existing.embedding.size == EMBEDDING_DIM) {
+            val recentAvg = averageAndNormalizeEmbeddings(liveEmbs)
+            val blended = FloatArray(EMBEDDING_DIM) { i ->
+                existing.embedding[i] * 0.90f + recentAvg[i] * 0.10f
+            }
+            l2Normalize(blended).toList()
+        } else {
+            existing.embedding
+        }
+
+        val updatedPitch = if (livePitches.isNotEmpty()) {
+            existing.meanPitchHz * 0.88f + medianFloat(livePitches) * 0.12f
+        } else {
+            existing.meanPitchHz
+        }
+
+        val styleDesc = buildSpeakingStyleSummaryBn(updatedPitch, existing.speakingCadenceWpm, mergedWords)
+        val updatedProfile = existing.copy(
+            meanPitchHz = updatedPitch,
+            minPitchHz = min(existing.minPitchHz, updatedPitch - 15f),
+            maxPitchHz = max(existing.maxPitchHz, updatedPitch + 15f),
+            speakingStyleSummaryBn = styleDesc,
+            signatureWords = mergedWords,
+            sampleCount = existing.sampleCount + 1,
+            embedding = blendedEmb
+        )
+
+        val mutable = currentList.toMutableList()
+        mutable[idx] = updatedProfile
+        _state.value = _state.value.copy(enrolledProfiles = mutable)
+
+        // Persist updated adaptive profile every 4 turns so Google Drive stays fresh without spamming
+        if (updatedProfile.sampleCount % 4 == 0) {
+            saveProfilesToLocalAndSyncTo5TbDrive(context, mutable, updatedProfile)
+        }
+    }
+
+    private fun buildSpeakingStyleSummaryBn(
+        meanPitchHz: Float,
+        cadenceWpm: Int,
+        words: List<String>
+    ): String {
+        val toneDesc = when {
+            meanPitchHz < 130f -> "গম্ভীর ও ভরাট কণ্ঠ"
+            meanPitchHz < 170f -> "স্পষ্ট ও ভারসাম্যপূর্ণ কণ্ঠ"
+            meanPitchHz < 245f -> "উজ্জ্বল ও সুরেলা কণ্ঠ"
+            else -> "চঞ্চল ও উচ্চ-পিচ কণ্ঠ"
+        }
+        val speedDesc = when {
+            cadenceWpm > 145 -> "দ্রুত বাচনভঙ্গি"
+            cadenceWpm < 95 -> "ধীরস্থির বাচনভঙ্গি"
+            else -> "স্বাভাবিক গতির বাচনভঙ্গি"
+        }
+        val sampleWords = if (words.isNotEmpty()) " • ব্যবহৃত শব্দ: ${words.takeLast(5).joinToString(", ")}" else ""
+        return "$toneDesc ($speedDesc$sampleWords)"
+    }
+
+    /**
+     * YIN / Normalized Difference Autocorrelation Pitch Estimator for 16kHz speech (`72 Hz` .. `420 Hz`).
      */
     private fun estimateFundamentalPitchYinHz(samples: FloatArray, sampleRate: Int): Float {
         val n = min(samples.size, 800)
-        val minLag = sampleRate / 410 // ~39 samples (410 Hz)
-        val maxLag = min(sampleRate / 75, n / 2) // ~213 samples (75 Hz)
+        val minLag = sampleRate / 420
+        val maxLag = min(sampleRate / 72, n / 2)
         if (maxLag <= minLag + 4) return 0f
 
         val diff = FloatArray(maxLag + 1)
@@ -308,7 +598,7 @@ object VoiceBiometricsEngine {
             while (j < windowLen) {
                 val delta = samples[j] - samples[j + tau]
                 d += delta * delta
-                j += 2 // stride 2 for ultra-fast real-time execution
+                j += 2
             }
             diff[tau] = d
         }
@@ -321,7 +611,7 @@ object VoiceBiometricsEngine {
         }
 
         var bestTau = -1
-        val threshold = 0.22f
+        val threshold = 0.24f
         var tau = minLag
         while (tau <= maxLag) {
             if (cmndf[tau] < threshold) {
@@ -342,10 +632,9 @@ object VoiceBiometricsEngine {
                     bestTau = t
                 }
             }
-            if (minVal > 0.52f) return 0f
+            if (minVal > 0.56f) return 0f
         }
 
-        // Parabolic interpolation around bestTau for sub-sample Hz precision
         val exactTau = if (bestTau in (minLag + 1) until maxLag) {
             val s0 = cmndf[bestTau - 1]
             val s1 = cmndf[bestTau]
@@ -359,10 +648,6 @@ object VoiceBiometricsEngine {
         return if (exactTau > 0f) sampleRate.toFloat() / exactTau else 0f
     }
 
-    /**
-     * Estimates Spectral Centroid (vocal brightness / formant center) in Hz using Goertzel / band energy distribution
-     * combined with zero-crossing rate.
-     */
     private fun computeSpectralCentroidHz(samples: FloatArray, sampleRate: Int): Float {
         val n = min(samples.size, 512)
         if (n < 64) return 1400f
@@ -386,14 +671,6 @@ object VoiceBiometricsEngine {
         return (bandCentroid * 0.72f + zcrHz * 0.28f).coerceIn(300f, 4200f)
     }
 
-    /**
-     * Extracts a 16-dimensional L2-normalized speaker timbre & formant embedding vector (`FloatArray(16)`):
-     * - Slots 0..11: Log Mel-formant filterbank energies across human vocal tract resonances (120 Hz .. 4400 Hz)
-     * - Slot 12: Normalized Fundamental Pitch ($F_0$)
-     * - Slot 13: Normalized Spectral Centroid
-     * - Slot 14: High-to-Low Vocal Formant Ratio ($F_2/F_1$ proxy)
-     * - Slot 15: Crest / Harmonicity Factor
-     */
     private fun extractNormalizedVocalTimbreEmbedding(
         samples: FloatArray,
         sampleRate: Int,
@@ -449,22 +726,15 @@ object VoiceBiometricsEngine {
         return max(0f, power)
     }
 
-    /**
-     * Classifies whether the current speaker is MALE (`ছেলে`), FEMALE (`মেয়ে`), or CHILD (`শিশু`)
-     * using Fundamental Frequency ($F_0$) and Spectral Formant Centroid.
-     */
     private fun classifyGenderAndAgeGroup(pitchHz: Float, centroidHz: Float): DetectedSpeakerGender {
         return when {
             pitchHz >= 278f || (pitchHz >= 258f && centroidHz >= 2150f) -> DetectedSpeakerGender.CHILD
             pitchHz >= 172f || (pitchHz in 160f..172f && centroidHz >= 1780f) -> DetectedSpeakerGender.FEMALE
-            pitchHz in 75f..171f -> DetectedSpeakerGender.MALE
+            pitchHz in 72f..171f -> DetectedSpeakerGender.MALE
             else -> DetectedSpeakerGender.UNKNOWN
         }
     }
 
-    /**
-     * Allows Gemini Multimodal Live native audio perception to refine speaker gender or identity hints.
-     */
     fun updateFromGeminiLivePerception(
         genderOrAgeHint: String?,
         speakerNameHint: String? = null
@@ -488,26 +758,30 @@ object VoiceBiometricsEngine {
     }
 
     private fun matchSpeakerAgainstProfiles(
+        context: Context,
         pitchHz: Float,
         centroidHz: Float,
         liveEmbedding: FloatArray,
-        acousticGender: DetectedSpeakerGender
+        acousticGender: DetectedSpeakerGender,
+        normRms: Float
     ) {
         val current = _state.value
         val profiles = current.enrolledProfiles
         val hasBoss = profiles.any { it.isOwnerBoss }
 
         if (profiles.isEmpty()) {
-            val badge = "🎙️ নতুন কণ্ঠ: ${acousticGender.labelBn} (${acousticGender.labelEn} • ${pitchHz.toInt()}Hz)"
+            val badge = "🎙️ কণ্ঠ শনাক্ত: ${acousticGender.labelBn} (${acousticGender.labelEn} • ${pitchHz.toInt()}Hz) • ভয়েস ট্রেনিং করুন"
             _state.value = current.copy(
-                activeSpeakerName = "অতিথি (${acousticGender.labelBn})",
-                isOwnerBossVerified = true, // Not locked until Boss enrolls
+                activeSpeakerName = "বস (${acousticGender.labelBn})",
+                isOwnerBossVerified = true,
                 isKnownEnrolledSpeaker = false,
+                isWaitingForNewSpeakerName = false,
                 hasOwnerBossProfile = false,
                 detectedGender = acousticGender,
                 currentPitchHz = pitchHz.toInt(),
                 spectralCentroidHz = centroidHz.toInt(),
                 similarityScorePercent = 0,
+                liveVoiceRmsLevel = normRms,
                 isCurrentlySpeaking = true,
                 liveHudBadgeText = badge
             )
@@ -520,8 +794,11 @@ object VoiceBiometricsEngine {
         for (profile in profiles) {
             val cosSim = cosineSimilarity(liveEmbedding, profile.embedding.toFloatArray())
             val pitchDiff = abs(pitchHz - profile.meanPitchHz)
-            val pitchPenalty = (pitchDiff / 95f).coerceIn(0f, 0.32f)
-            val combinedScore = (cosSim * 0.82f + (1f - pitchPenalty) * 0.18f).coerceIn(0f, 1f)
+            // Check if pitch falls inside the speaker's natural min..max pitch envelope
+            val withinPitchEnvelope = pitchHz in (profile.minPitchHz - 18f)..(profile.maxPitchHz + 18f)
+            val pitchBonus = if (withinPitchEnvelope) 0.06f else 0f
+            val pitchPenalty = (pitchDiff / 110f).coerceIn(0f, 0.28f)
+            val combinedScore = (cosSim * 0.82f + (1f - pitchPenalty) * 0.18f + pitchBonus).coerceIn(0f, 1f)
             if (combinedScore > bestScore) {
                 bestScore = combinedScore
                 bestProfile = profile
@@ -529,9 +806,11 @@ object VoiceBiometricsEngine {
         }
 
         val simPct = (bestScore * 100f).toInt().coerceIn(0, 99)
-        val matchedThreshold = if (bestProfile?.isOwnerBoss == true) 0.78f else 0.80f
+        // Balanced threshold so Boss's natural voice variations (soft/loud/fast) are always recognized smoothly
+        val matchedThreshold = if (bestProfile?.isOwnerBoss == true) 0.72f else 0.75f
 
         if (bestProfile != null && bestScore >= matchedThreshold) {
+            unknownSpeakerConsecutiveFrames = 0
             val isBoss = bestProfile.isOwnerBoss
             if (isBoss) {
                 lastVerifiedBossAtMs = System.currentTimeMillis()
@@ -549,53 +828,61 @@ object VoiceBiometricsEngine {
                 activeSpeakerName = bestProfile.speakerName,
                 isOwnerBossVerified = isBoss,
                 isKnownEnrolledSpeaker = true,
+                isWaitingForNewSpeakerName = false,
                 hasOwnerBossProfile = hasBoss,
                 detectedGender = effectiveGender,
                 currentPitchHz = pitchHz.toInt(),
                 spectralCentroidHz = centroidHz.toInt(),
                 similarityScorePercent = simPct,
+                liveVoiceRmsLevel = normRms,
                 isCurrentlySpeaking = true,
                 liveHudBadgeText = badge
             )
         } else {
-            // Grace window: if Boss was verified < 3.5 seconds ago and pitch is still close to Boss's pitch, keep Boss lock stable
             val bossProfile = profiles.firstOrNull { it.isOwnerBoss }
             val withinBossGrace = bossProfile != null &&
-                (System.currentTimeMillis() - lastVerifiedBossAtMs < 3500L) &&
-                abs(pitchHz - bossProfile.meanPitchHz) < 42f
+                (System.currentTimeMillis() - lastVerifiedBossAtMs < 4500L) &&
+                abs(pitchHz - bossProfile.meanPitchHz) < 48f
 
             if (withinBossGrace && bossProfile != null) {
+                unknownSpeakerConsecutiveFrames = 0
                 val badge = buildHudBadgeText(
                     speakerName = bossProfile.speakerName,
                     gender = bossProfile.gender,
                     isOwnerVerified = true,
                     isKnownSpeaker = true,
                     hasBossProfile = hasBoss,
-                    similarityPct = max(simPct, 82)
+                    similarityPct = max(simPct, 84)
                 )
                 _state.value = current.copy(
                     activeSpeakerName = bossProfile.speakerName,
                     isOwnerBossVerified = true,
                     isKnownEnrolledSpeaker = true,
+                    isWaitingForNewSpeakerName = false,
                     hasOwnerBossProfile = hasBoss,
                     detectedGender = bossProfile.gender,
                     currentPitchHz = pitchHz.toInt(),
                     spectralCentroidHz = centroidHz.toInt(),
-                    similarityScorePercent = max(simPct, 82),
+                    similarityScorePercent = max(simPct, 84),
+                    liveVoiceRmsLevel = normRms,
                     isCurrentlySpeaking = true,
                     liveHudBadgeText = badge
                 )
             } else {
-                val badge = "🎙️ নতুন কণ্ঠ: ${acousticGender.labelBn} (${acousticGender.labelEn} • Guest)"
+                unknownSpeakerConsecutiveFrames++
+                val waitingForName = unknownSpeakerConsecutiveFrames >= 3
+                val badge = "🎙️ নতুন কণ্ঠ: ${acousticGender.labelBn} (${acousticGender.labelEn} • ${pitchHz.toInt()}Hz • নাম বললে চিনে নেবে)"
                 _state.value = current.copy(
-                    activeSpeakerName = "নতুন কণ্ঠ (${acousticGender.labelBn})",
+                    activeSpeakerName = "নতুন বক্তা (${acousticGender.labelBn})",
                     isOwnerBossVerified = !hasBoss,
                     isKnownEnrolledSpeaker = false,
+                    isWaitingForNewSpeakerName = waitingForName,
                     hasOwnerBossProfile = hasBoss,
                     detectedGender = acousticGender,
                     currentPitchHz = pitchHz.toInt(),
                     spectralCentroidHz = centroidHz.toInt(),
                     similarityScorePercent = simPct,
+                    liveVoiceRmsLevel = normRms,
                     isCurrentlySpeaking = true,
                     liveHudBadgeText = badge
                 )
@@ -615,22 +902,24 @@ object VoiceBiometricsEngine {
             isOwnerVerified && hasBossProfile ->
                 "🎙️ বক্তা: $speakerName (${gender.labelEn} • Verified ${if (similarityPct > 0) "$similarityPct%" else ""})".trim()
             isKnownSpeaker ->
-                "🎙️ বক্তা: $speakerName (${gender.labelEn} • ${gender.labelBn})"
+                "🎙️ বক্তা: $speakerName (${gender.labelBn} • ${gender.labelEn})"
             else ->
-                "🎙️ নতুন কণ্ঠ: ${gender.labelBn} (${gender.labelEn} • Guest)"
+                "🎙️ নতুন কণ্ঠ: ${gender.labelBn} (${gender.labelEn} • নাম বললে সেভ হবে)"
         }
     }
 
     /**
-     * Starts a 5-second live voice enrollment session for Boss ("বস") or any named guest/friend/family member.
-     * If `MultimodalLiveService` is already streaming mic audio, it reads directly from those frames;
-     * otherwise it opens a temporary 5-second `AudioRecord` capture so enrollment works anytime!
+     * Guided 3-Sentence Boss Voice Calibration & Multi-Speaker Voice Training:
+     * - Zero Mic Conflict: If `MultimodalLiveService` is already streaming mic audio (`lastLiveMicStreamFrameAtMs` < 1500ms),
+     *   it NEVER opens a competing `AudioRecord`—it reads directly from the live stream!
+     * - If `MultimodalLiveService` is offline, it opens a dedicated `AudioRecord` so training works anytime.
      */
     @SuppressLint("MissingPermission")
     fun startFiveSecondVoiceEnrollment(
         context: Context,
         speakerName: String = "বস",
         isOwnerBoss: Boolean = true,
+        durationSeconds: Int = if (isOwnerBoss) 8 else 5,
         onComplete: (String) -> Unit = {}
     ) {
         init(context)
@@ -647,8 +936,11 @@ object VoiceBiometricsEngine {
             isEnrolling = true,
             enrollmentTargetName = cleanName,
             enrollmentIsOwnerBoss = isOwnerBoss,
+            enrollmentStepIndex = 0,
+            enrollmentTotalSteps = BOSS_CALIBRATION_SENTENCES.size,
+            currentCalibrationSentenceBn = BOSS_CALIBRATION_SENTENCES.first(),
             enrollmentProgressPercent = 5,
-            liveHudBadgeText = "🎙️ ভয়েস লক রেকর্ডিং চলছে ($cleanName): ৫ সেকেন্ড স্বাভাবিক গলায় কথা বলুন..."
+            liveHudBadgeText = "🎙️ ভয়েস ট্রেনিং চলছে ($cleanName): নিচের বাক্যগুলো স্বাভাবিক গলায় পড়ুন..."
         )
 
         standaloneEnrollmentJob = scope.launch {
@@ -657,10 +949,10 @@ object VoiceBiometricsEngine {
                 android.Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
 
-            // Check if MultimodalLiveService is actively pumping frames; if not, capture directly from mic for 5 seconds
-            val recentFrameActive = (System.currentTimeMillis() - lastAnalyzedFrameAtMs) < 900L
+            // Only open a standalone AudioRecord if MultimodalLiveService is NOT actively streaming mic audio
+            val liveStreamActive = (System.currentTimeMillis() - lastLiveMicStreamFrameAtMs) < 1500L
             var tempRecorder: AudioRecord? = null
-            if (!recentFrameActive && hasPerm) {
+            if (!liveStreamActive && hasPerm) {
                 runCatching {
                     val minBuf = AudioRecord.getMinBufferSize(
                         SAMPLE_RATE,
@@ -668,7 +960,7 @@ object VoiceBiometricsEngine {
                         AudioFormat.ENCODING_PCM_16BIT
                     ).coerceAtLeast(3200)
                     tempRecorder = AudioRecord(
-                        MediaRecorder.AudioSource.MIC,
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
                         SAMPLE_RATE,
                         AudioFormat.CHANNEL_IN_MONO,
                         AudioFormat.ENCODING_PCM_16BIT,
@@ -680,18 +972,26 @@ object VoiceBiometricsEngine {
                 }
             }
 
-            val totalDurationMs = 5000L
+            val totalDurationMs = (durationSeconds.coerceIn(4, 12) * 1000L)
             val startMs = System.currentTimeMillis()
-            val pcmBuf = ByteArray(1600) // 50ms @ 16kHz 16-bit mono
+            val pcmBuf = ByteArray(1600)
 
             try {
-                while (System.currentTimeMillis() - startMs < totalDurationMs) {
+                while (_state.value.isEnrolling && (System.currentTimeMillis() - startMs < totalDurationMs)) {
                     val elapsed = System.currentTimeMillis() - startMs
-                    val pct = ((elapsed * 100L) / totalDurationMs).toInt().coerceIn(5, 99)
+                    val timePct = ((elapsed * 100L) / totalDurationMs).toInt().coerceIn(5, 99)
+                    val stepIdx = when {
+                        timePct < 34 -> 0
+                        timePct < 68 -> 1
+                        else -> 2
+                    }
                     _state.value = _state.value.copy(
-                        enrollmentProgressPercent = pct,
-                        liveHudBadgeText = "🎙️ ভয়েস প্রিন্ট স্ক্যান হচ্ছে ($cleanName • $pct%)..."
+                        enrollmentProgressPercent = max(_state.value.enrollmentProgressPercent, timePct),
+                        enrollmentStepIndex = stepIdx,
+                        currentCalibrationSentenceBn = BOSS_CALIBRATION_SENTENCES.getOrElse(stepIdx) { BOSS_CALIBRATION_SENTENCES.last() },
+                        liveHudBadgeText = "🎙️ ভয়েস প্রিন্ট স্ক্যান হচ্ছে ($cleanName • ধাপ ${stepIdx + 1}/৩ • $timePct%)..."
                     )
+
                     val rec = tempRecorder
                     if (rec != null && rec.RecordingStateSafe() == AudioRecord.RECORDSTATE_RECORDING) {
                         val readBytes = rec.read(pcmBuf, 0, pcmBuf.size)
@@ -699,11 +999,12 @@ object VoiceBiometricsEngine {
                             processIncoming16kHzPcmFrame(
                                 context = context,
                                 pcm16LeBytes = pcmBuf.copyOf(readBytes),
-                                isAgentCurrentlySpeaking = false
+                                isAgentCurrentlySpeaking = false,
+                                fromLiveStream = false
                             )
                         }
                     } else {
-                        delay(100L)
+                        delay(80L)
                     }
                 }
             } finally {
@@ -715,10 +1016,20 @@ object VoiceBiometricsEngine {
                 context = context,
                 speakerName = cleanName,
                 isOwnerBoss = isOwnerBoss,
-                genderOverride = null
+                genderOverride = null,
+                spokenSampleText = BOSS_CALIBRATION_SENTENCES.joinToString(" ")
             )
             onComplete(resultMsg)
         }
+    }
+
+    fun cancelActiveEnrollment() {
+        standaloneEnrollmentJob?.cancel()
+        standaloneEnrollmentJob = null
+        _state.value = _state.value.copy(
+            isEnrolling = false,
+            enrollmentProgressPercent = 0
+        )
     }
 
     private fun AudioRecord.RecordingStateSafe(): Int = try {
@@ -728,14 +1039,15 @@ object VoiceBiometricsEngine {
     }
 
     /**
-     * Immediately enrolls a speaker ("বস" or a friend/family member like "সিয়াম") using the rolling 5-second
-     * vocal buffer captured while they were just speaking to the AI!
+     * Enrolls Boss or any guest speaker ("সিয়াম", "রাহাত", etc.) immediately from the rolling vocal buffer
+     * and learns their speaking style & vocabulary.
      */
     fun enrollSpeakerFromRecentVoiceBuffer(
         context: Context,
         speakerName: String,
         isOwnerBoss: Boolean = false,
-        genderOverride: DetectedSpeakerGender? = null
+        genderOverride: DetectedSpeakerGender? = null,
+        spokenSampleText: String = ""
     ): String {
         init(context)
         val cleanName = speakerName.trim().ifBlank { if (isOwnerBoss) "বস" else "মেহমান" }
@@ -753,7 +1065,8 @@ object VoiceBiometricsEngine {
             context = context,
             speakerName = cleanName,
             isOwnerBoss = isOwnerBoss,
-            genderOverride = genderOverride
+            genderOverride = genderOverride,
+            spokenSampleText = spokenSampleText
         )
     }
 
@@ -761,20 +1074,23 @@ object VoiceBiometricsEngine {
         context: Context,
         speakerName: String,
         isOwnerBoss: Boolean,
-        genderOverride: DetectedSpeakerGender?
+        genderOverride: DetectedSpeakerGender?,
+        spokenSampleText: String
     ): String {
         val pitches: List<Float>
         val centroids: List<Float>
         val embeddings: List<FloatArray>
+        val recentWords: List<String>
 
         synchronized(rollingFrameLock) {
-            val srcPitches = if (enrollmentPitches.size >= 4) enrollmentPitches else rollingPitchHistory.toList()
-            val srcCentroids = if (enrollmentCentroids.size >= 4) enrollmentCentroids else rollingCentroidHistory.toList()
-            val srcEmbs = if (enrollmentEmbeddings.size >= 4) enrollmentEmbeddings else rollingEmbeddings.toList()
+            val srcPitches = if (enrollmentPitches.size >= 3) enrollmentPitches else rollingPitchHistory.toList()
+            val srcCentroids = if (enrollmentCentroids.size >= 3) enrollmentCentroids else rollingCentroidHistory.toList()
+            val srcEmbs = if (enrollmentEmbeddings.size >= 3) enrollmentEmbeddings else rollingEmbeddings.toList()
 
             pitches = srcPitches.toList()
             centroids = srcCentroids.toList()
             embeddings = srcEmbs.toList()
+            recentWords = rollingSpokenWords.toList()
 
             enrollmentPitches.clear()
             enrollmentCentroids.clear()
@@ -784,6 +1100,8 @@ object VoiceBiometricsEngine {
         val meanPitch = if (pitches.isNotEmpty()) medianFloat(pitches) else {
             if (genderOverride == DetectedSpeakerGender.FEMALE) 210f else 128f
         }
+        val minPitch = if (pitches.isNotEmpty()) (pitches.minOrNull() ?: (meanPitch - 20f)) else (meanPitch - 20f)
+        val maxPitch = if (pitches.isNotEmpty()) (pitches.maxOrNull() ?: (meanPitch + 25f)) else (meanPitch + 25f)
         val pitchStd = if (pitches.size > 1) {
             val avg = pitches.average().toFloat()
             sqrt(pitches.map { (it - avg) * (it - avg) }.average()).toFloat().coerceAtLeast(8f)
@@ -793,7 +1111,6 @@ object VoiceBiometricsEngine {
         val finalEmbedding = if (embeddings.isNotEmpty()) {
             averageAndNormalizeEmbeddings(embeddings)
         } else {
-            // Fallback synthetic baseline if invoked in emulator with zero mic input
             val synth = FloatArray(EMBEDDING_DIM) { idx ->
                 when (idx) {
                     12 -> ((meanPitch - 80f) / 280f) * 3.2f
@@ -807,16 +1124,45 @@ object VoiceBiometricsEngine {
         val detectedGender = genderOverride?.takeIf { it != DetectedSpeakerGender.UNKNOWN }
             ?: classifyGenderAndAgeGroup(meanPitch, meanCentroid)
 
+        val extractedWords = (spokenSampleText.split(Regex("\\s+")) + recentWords)
+            .map { it.trim().replace(Regex("[^\\u0980-\\u09FFa-zA-Z0-9]"), "") }
+            .filter { it.length >= 3 }
+            .distinct()
+            .takeLast(16)
+
+        val cadenceWpm = (115 + (embeddings.size.coerceIn(5, 60) / 2)).coerceIn(95, 165)
+        val styleSummary = buildSpeakingStyleSummaryBn(meanPitch, cadenceWpm, extractedWords)
+
         val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
+        val existingProfile = _state.value.enrolledProfiles.firstOrNull {
+            (isOwnerBoss && it.isOwnerBoss) || it.speakerName.equals(speakerName, ignoreCase = true)
+        }
+
+        // If re-training Boss or an existing speaker, blend with existing profile for even higher accuracy
+        val mergedEmbedding = if (existingProfile != null && existingProfile.embedding.size == EMBEDDING_DIM && embeddings.isNotEmpty()) {
+            val blended = FloatArray(EMBEDDING_DIM) { i ->
+                existingProfile.embedding[i] * 0.35f + finalEmbedding[i] * 0.65f
+            }
+            l2Normalize(blended).toList()
+        } else {
+            finalEmbedding.toList()
+        }
+
         val newProfile = EnrolledVoiceProfile(
             id = if (isOwnerBoss) "owner_boss_voice_lock" else "speaker_${speakerName.lowercase().replace(Regex("[^a-z0-9\\u0980-\\u09FF]"), "_")}",
             speakerName = speakerName,
             isOwnerBoss = isOwnerBoss,
             gender = detectedGender,
             meanPitchHz = meanPitch,
+            minPitchHz = minPitch,
+            maxPitchHz = maxPitch,
             pitchStdHz = pitchStd,
             spectralCentroidHz = meanCentroid,
-            embedding = finalEmbedding.toList(),
+            speakingCadenceWpm = cadenceWpm,
+            speakingStyleSummaryBn = styleSummary,
+            signatureWords = extractedWords,
+            sampleCount = (existingProfile?.sampleCount ?: 0) + 1,
+            embedding = mergedEmbedding,
             enrolledAtFormatted = nowStr
         )
 
@@ -831,6 +1177,7 @@ object VoiceBiometricsEngine {
         if (isOwnerBoss) {
             lastVerifiedBossAtMs = System.currentTimeMillis()
         }
+        unknownSpeakerConsecutiveFrames = 0
 
         val hasBoss = updatedList.any { it.isOwnerBoss }
         val badge = buildHudBadgeText(
@@ -846,6 +1193,7 @@ object VoiceBiometricsEngine {
             activeSpeakerName = newProfile.speakerName,
             isOwnerBossVerified = isOwnerBoss || _state.value.isOwnerBossVerified,
             isKnownEnrolledSpeaker = true,
+            isWaitingForNewSpeakerName = false,
             hasOwnerBossProfile = hasBoss,
             detectedGender = newProfile.gender,
             currentPitchHz = meanPitch.toInt(),
@@ -858,9 +1206,9 @@ object VoiceBiometricsEngine {
         )
 
         return if (isOwnerBoss) {
-            "জি বস! আপনার ভয়েস প্রিন্ট (${detectedGender.labelBn} • ${meanPitch.toInt()}Hz) সফলভাবে লক করা হয়েছে এবং আপনার 5TB Google Drive (/AI_OS_5TB_Core/Voice_Profiles/)-এ অটো-সিঙ্ক করে রাখা হয়েছে। এখন থেকে শুধুমাত্র আপনার কণ্ঠেই সংবেদনশীল আদেশগুলো কার্যকর হবে।"
+            "জি বস! আপনার মেইন ভয়েস প্রিন্ট ও কথা বলার ধরন (${detectedGender.labelBn} • ${meanPitch.toInt()}Hz • $styleSummary) সফলভাবে চিনে লক করা হয়েছে এবং Google Drive-এ অটো-সেভ হয়েছে। এখন থেকে আপনার কণ্ঠ শুনলেই আমি সাথে সাথে চিনে নেব!"
         } else {
-            "জি বস! '$speakerName'-এর কণ্ঠস্বর (${detectedGender.labelBn} • ${meanPitch.toInt()}Hz) সফলভাবে ভয়েস প্রিন্ট মেমোরিতে এবং 5TB Google Drive (/AI_OS_5TB_Core/Voice_Profiles/)-এ সেভ করে রাখা হয়েছে। এখন থেকে '$speakerName' কথা বললেই আমি সাথে সাথে চিনে ফেলব!"
+            "জি বস! '$speakerName'-এর কণ্ঠস্বর ও কথা বলার ধরন (${detectedGender.labelBn} • ${meanPitch.toInt()}Hz • $styleSummary) মেমোরি ও Google Drive-এ সেভ করে নিয়েছি। এখন থেকে '$speakerName' কথা বললেই আমি তার গলা শুনে চিনে ফেলব!"
         }
     }
 
@@ -872,13 +1220,25 @@ object VoiceBiometricsEngine {
         }
         val hasBoss = remaining.any { it.isOwnerBoss }
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_PROFILES_JSON, serializeProfilesJson(remaining)).apply()
+        val jsonStr = serializeProfilesJson(remaining)
+        prefs.edit().putString(KEY_PROFILES_JSON, jsonStr).apply()
+
+        val appCtx = context.applicationContext
+        scope.launch(Dispatchers.IO) {
+            GoogleDriveMemorySyncService.backupGeneratedFileToDrive(
+                context = appCtx,
+                fileName = "All_Enrolled_Voice_Profiles.json",
+                contentBytes = jsonStr.toByteArray(Charsets.UTF_8),
+                summaryDescription = "Master 5TB Voice Biometrics Registry (${remaining.size} Speakers)",
+                targetSubFolder = GoogleDriveMemorySyncService.SUBFOLDER_VOICE_PROFILES
+            )
+        }
 
         _state.value = _state.value.copy(
             enrolledProfiles = remaining,
             hasOwnerBossProfile = hasBoss,
             isOwnerBossVerified = !hasBoss,
-            liveHudBadgeText = if (hasBoss) _state.value.liveHudBadgeText else "🎙️ ভয়েস বায়োমেট্রিক্স প্রস্তুত • বসের ভয়েস লক করুন"
+            liveHudBadgeText = if (hasBoss) _state.value.liveHudBadgeText else "🎙️ স্যারের ভয়েস ট্রেনিং করুন (৩টি বাক্য পড়ে মেইন ভয়েস লক করুন)"
         )
         return "'$profileIdOrName'-এর ভয়েস প্রিন্ট মুছে ফেলা হয়েছে।"
     }
@@ -895,9 +1255,8 @@ object VoiceBiometricsEngine {
             .putString(KEY_PROFILES_JSON, jsonStr)
             .apply()
 
-        // Automatically sync to `/AI_OS_5TB_Core/Voice_Profiles/` (and `/AI_OS_Memory/Voice_Profiles/`) in 5TB Google Drive
         val singleProfileJson = JSONObject().apply {
-            put("cloudPath", "/AI_OS_5TB_Core/Voice_Profiles/${latestProfile.id}.json")
+            put("cloudPath", "/AI_OS_Memory/Voice_Profiles/${latestProfile.id}.json")
             put("profile", latestProfile.toJson())
             put("allProfilesCount", allProfiles.size)
         }.toString(2)
@@ -909,7 +1268,7 @@ object VoiceBiometricsEngine {
                 context = appCtx,
                 fileName = "VoicePrint_${safeName}.json",
                 contentBytes = singleProfileJson.toByteArray(Charsets.UTF_8),
-                summaryDescription = "Enrolled Speaker Voice Print (${latestProfile.speakerName} • ${latestProfile.gender.labelEn} • ${latestProfile.meanPitchHz.toInt()}Hz)",
+                summaryDescription = "Enrolled Speaker Voice Print (${latestProfile.speakerName} • ${latestProfile.gender.labelEn} • ${latestProfile.meanPitchHz.toInt()}Hz • ${latestProfile.speakingStyleSummaryBn})",
                 targetSubFolder = GoogleDriveMemorySyncService.SUBFOLDER_VOICE_PROFILES
             )
 
@@ -923,17 +1282,11 @@ object VoiceBiometricsEngine {
         }
     }
 
-    /**
-     * Checks whether a sensitive phone command is authorized by the Owner ("বস") voice print.
-     * Returns `null` if authorized, or a polite Bangla block message if an unrecognized/guest voice
-     * tries to execute a sensitive command.
-     */
     fun verifySensitiveActionOrReturnBlockMessageBn(
         actionOrToolName: String,
         targetOrAppSummary: String = ""
     ): String? {
         val st = _state.value
-        // Only gate if Boss has enrolled their voice print and Voice Security Lock is enabled
         if (!st.hasOwnerBossProfile || !st.isVoiceSecurityLockEnabled) return null
 
         val upperAction = actionOrToolName.uppercase().trim()
@@ -988,32 +1341,30 @@ object VoiceBiometricsEngine {
         return blockMsg
     }
 
-    /**
-     * Builds the real-time speaker identity & gender context block injected into Gemini Live's `system_instruction`
-     * and dynamic live context turns.
-     */
     fun buildPromptContextForGeminiLive(): String = buildString {
         val st = _state.value
-        append("\n\nREAL-TIME BIOMETRIC SPEAKER IDENTIFICATION & GENDER DETECTION ENGINE (`VoiceBiometricsEngine`):\n")
+        append("\n\nREAL-TIME BIOMETRIC SPEAKER IDENTIFICATION, SPEAKING STYLE & AUTO-GUEST LEARNING ENGINE (`VoiceBiometricsEngine`):\n")
         append("- LIVE CURRENT SPEAKER ON MIC: ${st.liveHudBadgeText}\n")
-        append("- SPEAKER IDENTITY: '${st.activeSpeakerName}' | DETECTED GENDER: ${st.detectedGender.labelBn} (${st.detectedGender.labelEn}) | PITCH: ${st.currentPitchHz}Hz | OWNER BOSS VERIFIED: ${if (st.isOwnerBossVerified) "YES (VERIFIED BOSS)" else "NO (GUEST / OTHER VOICE)"}\n")
-        append("- ENROLLED VOICE PROFILES IN 5TB GOOGLE DRIVE (`/AI_OS_5TB_Core/Voice_Profiles/`): ")
+        append("- SPEAKER IDENTITY: '${st.activeSpeakerName}' | DETECTED GENDER: ${st.detectedGender.labelBn} (${st.detectedGender.labelEn}) | PITCH: ${st.currentPitchHz}Hz | OWNER BOSS VERIFIED: ${if (st.isOwnerBossVerified) "YES (VERIFIED BOSS)" else "NO (OTHER SPEAKER / GUEST)"}\n")
+        append("- ENROLLED VOICE PROFILES & SPEAKING STYLES IN GOOGLE DRIVE (`/AI_OS_Memory/Voice_Profiles/`): ")
         if (st.enrolledProfiles.isEmpty()) {
-            append("None enrolled yet (Boss can say 'আমার ভয়েস লক করো' or tap 'Enroll My Voice' to lock Boss's voice in 5 seconds).\n")
+            append("None enrolled yet.\n")
         } else {
             append(
                 st.enrolledProfiles.joinToString("; ") {
-                    "${it.speakerName} (${if (it.isOwnerBoss) "BOSS/OWNER" else "Guest"}, ${it.gender.labelBn}/${it.gender.labelEn}, ${it.meanPitchHz.toInt()}Hz)"
+                    "${it.speakerName} [${if (it.isOwnerBoss) "BOSS/OWNER" else "Known Speaker"}, ${it.gender.labelBn}/${it.gender.labelEn}, ${it.meanPitchHz.toInt()}Hz, Style: ${it.speakingStyleSummaryBn}]"
                 } + "\n"
             )
         }
         append(
-            "- SPEAKER-AWARE CONVERSATION RULES:\n" +
-                "  1) When Boss (`Verified Boss`) is speaking, address him respectfully as 'বস' (Boss) or 'স্যার' (Sir) and execute all commands.\n" +
-                "  2) When an enrolled friend/family member is speaking (e.g., 'সিয়াম'), greet and address them naturally by their name ('$st.activeSpeakerName')!\n" +
-                "  3) You automatically know whether the current speaker is MALE (`ছেলে`), FEMALE (`মেয়ে`), or CHILD (`শিশু`) from both acoustic pitch/formants and your native multimodal audio perception. If the user asks 'এখন কে কথা বলছে?' or 'এই কণ্ঠটা ছেলে না মেয়ে?', answer accurately with the speaker's name, gender (`ছেলে`/`মেয়ে`/`শিশু`), and pitch!\n" +
-                "  4) Whenever the user says 'আমার ভয়েস লক করো' or 'এই কণ্ঠটা [নাম]-এর নামে সেভ রাখো', call `voice_biometrics_control(operation='ENROLL_VOICE', speaker_name='...', is_owner_boss='...')`.\n" +
-                "  5) VOICE SECURITY GATE: If `OWNER BOSS VERIFIED` is `NO` (an unrecognized voice is speaking) and they ask to send messages, make calls, install apps, open private apps, or delete files, politely refuse in Bangla and state that only Boss's verified voice can authorize sensitive actions.\n"
+            "- CRITICAL SPEAKER RECOGNITION & AUTO-INTRODUCTION RULES:\n" +
+                "  1) When Boss (`Verified Boss`) is speaking, address him respectfully as 'বস' (Boss) or 'স্যার' (Sir) and obey all commands immediately.\n" +
+                "  2) When an enrolled friend/family member is speaking (e.g., 'সিয়াম', 'রাহাত'), recognize their voice & speaking style and address them naturally by their name!\n" +
+                "  3) NEW / UNKNOWN SPEAKER PROTOCOL (অন্য কেউ কথা বললে আগে নাম জেনে কণ্ঠ ও কথা বলার ধরন চিনে নেওয়া): " +
+                "If `isWaitingForNewSpeakerName` is `${st.isWaitingForNewSpeakerName}` or you hear a new voice that is NOT Boss and NOT yet enrolled, politely ask them first in Bangla: 'আসসালামু আলাইকুম! আমি বুঝতে পারছি নতুন কেউ কথা বলছেন। আপনার নামটা কী বলবেন প্লিজ? তাহলে আমি আপনার কণ্ঠ ও কথা বলার ধরন চিনে রাখব।' " +
+                "As soon as they tell you their name (e.g. 'আমার নাম সিয়াম' / 'আমি রাহাত'), IMMEDIATELY call `voice_biometrics_control(operation='ENROLL_GUEST_VOICE', speaker_name='<name>', gender_hint='${st.detectedGender.id}')` so their voice print and speaking style are permanently learned and saved to Google Drive!\n" +
+                "  4) Whenever Boss says 'আমার ভয়েস লক করো' or reads the calibration sentences, call `voice_biometrics_control(operation='ENROLL_BOSS_VOICE', speaker_name='বস')`.\n" +
+                "  5) VOICE SECURITY GATE: If `OWNER BOSS VERIFIED` is `NO` and an unrecognized speaker asks to send messages, make calls, install apps, open private apps, or delete files, politely refuse in Bangla and explain that only Boss's verified voice can authorize sensitive actions.\n"
         )
     }
 

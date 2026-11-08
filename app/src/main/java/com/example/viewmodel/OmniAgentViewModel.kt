@@ -2062,6 +2062,8 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     private suspend fun evaluateAndSaveMemoryFromUserInput(userUtterance: String, aiReply: String = "") {
         val cleanUser = userUtterance.trim()
         if (cleanUser.isBlank()) return
+        val ctx = getApplication<Application>().applicationContext
+        com.example.service.VoiceBiometricsEngine.onUserTranscriptReceived(ctx, cleanUser)
         val decision = com.example.service.SmartMemoryAndSelfUpdateEngine.evaluateWorthRemembering(
             userUtterance = cleanUser,
             aiReply = aiReply
@@ -2082,6 +2084,12 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                 val updated = historyRepo.memoryNotesFlow.first()
                 com.example.service.SmartMemoryAndSelfUpdateEngine.syncLiveMemoryNotesSummary(
                     updated.map { "${it.title}: ${it.content} [${it.category}]" }
+                )
+                com.example.service.GoogleDriveMemorySyncService.backupMemoryNoteToDrive(
+                    context = ctx,
+                    title = decision.extractedTitle,
+                    factContent = decision.extractedContent,
+                    tagsOrCategory = decision.category
                 )
             }
         } else if (cleanUser.length > 3) {
