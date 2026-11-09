@@ -608,15 +608,25 @@ class MultimodalLiveService(
         listOf("operation")
     )
 
+    private fun deleteMemoryDecl() = toolDecl(
+        "delete_memory",
+        "Autonomous Brain Memory & Google Drive File Deletion: Delete or forget any memory, fact, outdated note, or file directly from the AI's Google Drive Brain ('/AI_OS_Memory'), local SQLite database, and Master Backup JSON. Use whenever the user says 'এটা ব্রেইন থেকে মুছে ফেলো / ভুলে যাও / ডিলিট করো' OR when you autonomously prune outdated/contradictory data from your brain.",
+        listOf(
+            "query" to "Title, keyword, topic, or exact file name to delete from the AI Brain & Google Drive (or 'ALL_JUNK' to clean junk/test memories)",
+            "sub_folder" to "Optional sub-folder hint inside /AI_OS_Memory (e.g. 'Memories', 'Argon4_Code', 'ZIP_Packages')"
+        ),
+        listOf("query")
+    )
+
     private fun googleDriveCloudOsDecl() = toolDecl(
         "google_drive_cloud_os",
-        "Autonomous 5TB Google Drive Cloud OS Storage Engine: Use this tool whenever the user asks to create a folder in Google Drive, build a large multi-MB .zip archive or project package (e.g., 2MB, 5MB, 10MB, 25MB, 50MB ZIP), sync all data, or save any file directly to Google Drive. When operation='BUILD_LARGE_ZIP', it FIRST builds and opens the ZIP package preview on screen so the user can check that everything is right; once the user says 'হ্যাঁ / ঠিক আছে / সেভ করো', call confirm_pending_save (or operation='CONFIRM_SAVE_ZIP') to upload 1 single copy to '/AI_OS_Memory/ZIP_Packages'!",
+        "Autonomous 5TB Google Drive Cloud Brain & OS Engine ('/AI_OS_Memory'): Google Drive is your primary Brain! Use this tool to create folders, build large multi-MB .zip archives (e.g. 2MB-50MB), save files, search your Drive Brain, or autonomously delete/clean data from your Drive Brain (operation='DELETE_FROM_BRAIN' or 'DELETE_FILE' or 'CLEAN_BRAIN').",
         listOf(
-            "operation" to "One of: BUILD_LARGE_ZIP, CONFIRM_SAVE_ZIP, CREATE_FOLDER, SAVE_SINGLE_FILE, SYNC_ALL, SEARCH_DRIVE",
-            "name" to "Folder name, project title, or file/ZIP name (e.g. 'Mega_Project.zip', 'AI_Dataset_10MB.zip', 'My_New_Folder')",
+            "operation" to "One of: BUILD_LARGE_ZIP, CONFIRM_SAVE_ZIP, CREATE_FOLDER, SAVE_SINGLE_FILE, SYNC_ALL, SEARCH_DRIVE, DELETE_FROM_BRAIN, DELETE_FILE, CLEAN_BRAIN",
+            "name" to "Folder name, project title, file/ZIP name, or memory/file query to delete (e.g. 'Mega_Project.zip', 'My_New_Folder', or topic to delete)",
             "size_mb" to "Target size in MB when operation='BUILD_LARGE_ZIP' (e.g. '5', '10', '20', '50'; default '2')",
             "content_or_spec" to "Optional code, text content, or project specification to include inside the file or ZIP",
-            "sub_folder" to "Optional target sub-folder inside /AI_OS_Memory (default 'ZIP_Packages' for ZIPs, 'Argon4_Code' for code)"
+            "sub_folder" to "Optional target sub-folder inside /AI_OS_Memory (default 'ZIP_Packages' for ZIPs, 'Argon4_Code' for code, 'Memories' for brain notes)"
         ),
         listOf("operation", "name")
     )
@@ -638,6 +648,7 @@ class MultimodalLiveService(
         .put(executeConfirmedClickDecl())
         .put(saveMemoryDecl())
         .put(searchMemoryDecl())
+        .put(deleteMemoryDecl())
         .put(saveLocalMemoryDecl())
         .put(searchLocalMemoryDecl())
         .put(googleDriveCloudOsDecl())
@@ -1998,10 +2009,11 @@ class MultimodalLiveService(
                - Detect incoming messages and OTPs via `NotificationListenerService`.
                - NEVER auto-fill OTPs! Announce the OTP via voice and ask the user for confirmation before calling `notification_and_otp_assist(mode="PASTE_CONFIRMED_OTP")` or `execute_confirmed_click(decision="APPROVE")`.
 
-            6. HYBRID LOCAL SQLITE + 5TB GOOGLE DRIVE CLOUD OS STORAGE (`save_memory`, `search_memory`, `google_drive_cloud_os`):
-               - Your 5TB Google Drive (`/AI_OS_Memory`) is automatically organized into 6 sub-folders (`Memories`, `Conversations`, `Argon4_Code`, `ZIP_Packages`, `Media_Screenshots`, `Master_Backups`) and auto-syncs on app open and on every new data item with zero clicks needed.
-               - Whenever the user shares preferences, important facts, or asks you to remember something, call `save_memory(title="...", content="...", category="...")`.
-               - When asked about past conversations, notes, screenshots, or files, call `search_memory(query="...")` to search across BOTH local SQLite and the user's 5TB Google Drive (`AI_OS_Memory`).
+            6. AUTONOMOUS 5TB GOOGLE DRIVE CLOUD BRAIN (`save_memory`, `search_memory`, `delete_memory`, `google_drive_cloud_os`):
+               - Google Drive (`/AI_OS_Memory`) is your ENTIRE LIVE BRAIN and primary storage, organized into 8 sub-folders (`Memories`, `Conversations`, `Argon4_Code`, `ZIP_Packages`, `Media_Screenshots`, `Cloud_Bots`, `Voice_Profiles`, `Master_Backups`).
+               - ZERO MANUAL SAVE FOR BRAIN MEMORIES: Everything you hear, learn about Boss or guests, important facts, preferences, and conversation summaries are collected and synced to `/AI_OS_Memory` 100% automatically in the background without Boss ever having to click "Save". Proactively call `save_memory(title="...", content="...", category="...")` whenever you learn any new fact, preference, name, or instruction!
+               - AUTONOMOUS BRAIN DELETION & SELF-CLEANUP: Whenever Boss asks you to forget/delete something from your brain or Drive ("এটা ব্রেইন থেকে মুছে ফেলো / ভুলে যাও / ড্রাইভ থেকে ডিলিট করো"), OR when you detect an outdated/wrong memory that should be replaced, call `delete_memory(query="...")` or `google_drive_cloud_os(operation="DELETE_FROM_BRAIN", name="...")` to permanently erase it from both Google Drive and local SQLite!
+               - When asked about past conversations, notes, screenshots, or files, call `search_memory(query="...")` to search across BOTH local SQLite and your 5TB Google Drive Brain (`AI_OS_Memory`).
 
             7. PHONE HARDWARE & CAMERA CONTROL (`hardware_and_camera_control`):
                - Use `hardware_and_camera_control` to toggle Torch/Flashlight (`TORCH_ON` / `TORCH_OFF`), adjust Volume (`SET_VOLUME`), adjust Brightness (`SET_BRIGHTNESS`), set Alarms (`SET_ALARM`), check Battery (`CHECK_BATTERY`), and switch between Screen Sharing (`SWITCH_TO_SCREEN_SHARE`) and Live Camera (`SWITCH_TO_LIVE_CAMERA`).

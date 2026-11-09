@@ -483,6 +483,22 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                     "SEARCH_DRIVE" -> {
                         com.example.service.GoogleDriveMemorySyncService.searchGoogleDriveMemory(ctx, name)
                     }
+                    "DELETE_FROM_BRAIN", "DELETE_FILE", "CLEAN_BRAIN" -> {
+                        val targetQuery = if (op == "CLEAN_BRAIN" && (name.isBlank() || name == "Archer_AI_Package")) {
+                            "ALL_JUNK"
+                        } else {
+                            name
+                        }
+                        val delRes = com.example.service.GoogleDriveMemorySyncService.deleteFromDriveBrain(
+                            context = ctx,
+                            queryOrTitleOrFileName = targetQuery,
+                            subFolderHint = subFolder
+                        )
+                        if (multimodalLiveState.value.isLiveActive) {
+                            multimodalLiveService.refreshExportConfig(_geminiApiKeyState.value)
+                        }
+                        delRes
+                    }
                     else -> {
                         com.example.service.GoogleDriveMemorySyncService.buildAndUploadLargeZipOrFolderToDrive(
                             context = ctx,
@@ -709,6 +725,20 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                 val localRes = historyRepo.searchLocalMemoryTimeMachine(query)
                 val driveRes = com.example.service.GoogleDriveMemorySyncService.searchGoogleDriveMemory(ctx, query)
                 "$localRes\n\n$driveRes"
+            }
+            "delete_memory" -> {
+                val query = args.optString("query").trim().ifBlank { args.optString("title").trim() }
+                val subFolder = args.optString("sub_folder").trim()
+                val delRes = com.example.service.GoogleDriveMemorySyncService.deleteFromDriveBrain(
+                    context = ctx,
+                    queryOrTitleOrFileName = query,
+                    subFolderHint = subFolder
+                )
+                if (multimodalLiveState.value.isLiveActive) {
+                    multimodalLiveService.refreshExportConfig(_geminiApiKeyState.value)
+                }
+                _liveArcherReply.value = delRes
+                delRes
             }
             "prepare_and_highlight" -> {
                 val appOrDeepLink = args.optString("app_or_deeplink").trim()
@@ -4270,8 +4300,19 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteMemoryNote(id: Int) {
+        val ctx = getApplication<Application>().applicationContext
         viewModelScope.launch {
+            val targetNote = historyRepo.memoryNotesFlow.first().firstOrNull { it.id == id }
             historyRepo.deleteMemoryNote(id)
+            if (targetNote != null) {
+                com.example.service.GoogleDriveMemorySyncService.deleteFromDriveBrain(
+                    context = ctx,
+                    queryOrTitleOrFileName = targetNote.title,
+                    subFolderHint = com.example.service.GoogleDriveMemorySyncService.SUBFOLDER_MEMORIES
+                )
+            } else {
+                com.example.service.GoogleDriveMemorySyncService.syncAllAppDataToDriveNow(ctx, speakResult = false)
+            }
         }
     }
 
@@ -4333,6 +4374,7 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun purgeJunkFromMemoryNow() {
+        val ctx = getApplication<Application>().applicationContext
         viewModelScope.launch {
             seedInitialDataIfEmpty()
             val notes = historyRepo.memoryNotesFlow.first()
@@ -4340,10 +4382,20 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             notes.forEach { n ->
                 if (com.example.service.SmartMemoryAndSelfUpdateEngine.isJunkMemoryNote(n.title, n.content)) {
                     historyRepo.deleteMemoryNote(n.id)
+                    com.example.service.GoogleDriveMemorySyncService.deleteFromDriveBrain(
+                        context = ctx,
+                        queryOrTitleOrFileName = n.title,
+                        subFolderHint = com.example.service.GoogleDriveMemorySyncService.SUBFOLDER_MEMORIES
+                    )
                     removed++
                 }
             }
-            val msg = "জি স্যার, মেমোরি সিস্টেম থেকে সব অপ্রয়োজনীয় ডেটা পরিষ্কার করা হয়েছে (কাজের মেমোরি ও কাজের ধাপগুলো সংরক্ষিত আছে)।"
+            com.example.service.GoogleDriveMemorySyncService.deleteFromDriveBrain(
+                context = ctx,
+                queryOrTitleOrFileName = "ALL_JUNK",
+                subFolderHint = com.example.service.GoogleDriveMemorySyncService.SUBFOLDER_MEMORIES
+            )
+            val msg = "জি স্যার, মেমোরি ও Google Drive ব্রেইন থেকে সব অপ্রয়োজনীয় ডেটা ($removed টি) পরিষ্কার করা হয়েছে।"
             _liveArcherReply.value = msg
         }
     }
