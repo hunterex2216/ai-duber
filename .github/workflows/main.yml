@@ -35,7 +35,7 @@ jobs:
           SDKM=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -1)
           yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
           for i in 1 2 3; do
-            "$SDKM" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-36" "build-tools;36.0.0" && break
+            "$SDKM" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-36" "platforms;android-36.1" "build-tools;36.0.0" && break
             echo "SDK retry $i"; sleep 5
           done || true
 
@@ -65,7 +65,7 @@ jobs:
               -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
               -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
-          echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8" >> gradle.properties
+          echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" >> gradle.properties
 
       - name: Build debug APK
         run: |

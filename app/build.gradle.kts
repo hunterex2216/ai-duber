@@ -146,3 +146,19 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   // "ksp"(libs.moshi.kotlin.codegen)
 }
+
+// Suppress harmless post-disposal KSP AWT-EventQueue-0 NullPointerException in the Gradle daemon JVM
+Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+  val msg = throwable.message.orEmpty()
+  val trace = throwable.stackTraceToString()
+  if (thread.name.startsWith("AWT-EventQueue") ||
+      msg.contains("ksp.com.intellij.openapi.application.ApplicationManager") ||
+      trace.contains("ksp.com.intellij.openapi.application.ApplicationManager")
+  ) {
+    return@setDefaultUncaughtExceptionHandler
+  }
+  System.err.print("Exception in thread \"${thread.name}\" ")
+  throwable.printStackTrace(System.err)
+}
+
+

@@ -455,14 +455,8 @@ fun AgentCommandScreen(
                 // 2C. 5TB Google Drive ('AI_OS_Memory') Quick Connect, Live Cloud Brain & Custom API / Script Slot
                 val driveSyncState by com.example.service.GoogleDriveMemorySyncService.state.collectAsState()
                 var showDriveApiSetupDialog by remember { mutableStateOf(false) }
-                var customDriveTokenInput by remember(driveSyncState.customAccessToken) {
-                    mutableStateOf(driveSyncState.customAccessToken)
-                }
-                var customDriveFolderIdInput by remember(driveSyncState.driveFolderId) {
-                    mutableStateOf(driveSyncState.driveFolderId)
-                }
-                var customAppsScriptUrlInput by remember(driveSyncState.customAppsScriptUrl) {
-                    mutableStateOf(driveSyncState.customAppsScriptUrl)
+                var universalApiInput by remember(driveSyncState.universalApiInput) {
+                    mutableStateOf(driveSyncState.universalApiInput)
                 }
 
                 Row(
@@ -615,44 +609,58 @@ fun AgentCommandScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
-                                    text = "স্যার, এই AI-এর সমস্ত মেমোরি, আগের কথোপকথন ও ভয়েস প্রোফাইল `/AI_OS_Memory` ফোল্ডারে স্বয়ংক্রিয়ভাবে সেভ ও রিস্টোর হয়। আপনি সরাসরি Google Sign-In করতে পারেন অথবা নিচে আপনার Drive OAuth Token / Folder ID / Apps Script Web App URL বসাতে পারেন:",
+                                    text = "স্যার, এই AI-এর সমস্ত মেমোরি, আগের কথোপকথন ও ভয়েস প্রোফাইল `/AI_OS_Memory` ফোল্ডারে স্বয়ংক্রিয়ভাবে সেভ ও রিস্টোর হয়। আপনি সরাসরি Google Sign-In করতে পারেন অথবা নিচের ১টি বক্সে মেইন API / Token / Apps Script URL / Drive ফোল্ডার লিংক বসান — সিস্টেম নিজেই চিনে কানেক্ট করবে। কানেক্ট হলে আপনার জিমেইলে কনফার্মেশন মেইল যাবে:",
                                     color = Color(0xFFD7F7EA),
                                     fontSize = 11.sp,
                                     lineHeight = 15.sp
                                 )
 
                                 OutlinedTextField(
-                                    value = customDriveFolderIdInput,
-                                    onValueChange = { customDriveFolderIdInput = it },
-                                    label = { Text("📁 Google Drive Folder ID বা লিংক (ঐচ্ছিক)", color = CyberCyan, fontSize = 10.5.sp) },
-                                    placeholder = { Text("https://drive.google.com/drive/folders/...", fontSize = 10.sp) },
-                                    singleLine = true,
+                                    value = universalApiInput,
+                                    onValueChange = { universalApiInput = it },
+                                    label = { Text("🔑 মেইন API / লিংক / টোকেন (১টি বক্স — প্রি-লোডেড)", color = MatrixGreen, fontSize = 10.5.sp) },
+                                    placeholder = { Text("AIzaSy... / ya29... / script.google.com/.../exec", fontSize = 10.sp) },
+                                    minLines = 2,
+                                    maxLines = 4,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .testTag("drive_custom_folder_id_input")
+                                        .testTag("drive_universal_api_input")
                                 )
 
-                                OutlinedTextField(
-                                    value = customDriveTokenInput,
-                                    onValueChange = { customDriveTokenInput = it },
-                                    label = { Text("🔑 Google Drive OAuth Access Token (ya29... ঐচ্ছিক)", color = MatrixGreen, fontSize = 10.5.sp) },
-                                    placeholder = { Text("ya29.a0AfH6SM...", fontSize = 10.sp) },
-                                    singleLine = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("drive_custom_token_input")
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            val builtInKey = com.example.service.GoogleDriveMemorySyncService.BUILT_IN_DRIVE_API_KEY
+                                            universalApiInput = builtInKey
+                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            cm.setPrimaryClip(android.content.ClipData.newPlainText("Google_Drive_API_Key", builtInKey))
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "✓ মেইন Drive API Key বক্সে বসানো ও কপি করা হয়েছে!",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        },
+                                        border = BorderStroke(1.dp, CyberCyan),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("🔑 মেইন API কপি ও বসান", color = CyberCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
 
-                                OutlinedTextField(
-                                    value = customAppsScriptUrlInput,
-                                    onValueChange = { customAppsScriptUrlInput = it },
-                                    label = { Text("⚡ Google Apps Script Web App URL (পপআপ ছাড়া ১০০% অটো-ড্রাইভ)", color = Color(0xFFFBBF24), fontSize = 10.5.sp) },
-                                    placeholder = { Text("https://script.google.com/macros/s/.../exec", fontSize = 10.sp) },
-                                    singleLine = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("drive_custom_apps_script_input")
-                                )
+                                    OutlinedButton(
+                                        onClick = {
+                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            val pasted = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                                            if (pasted.isNotBlank()) universalApiInput = pasted
+                                        },
+                                        border = BorderStroke(1.dp, MatrixGreen),
+                                        modifier = Modifier.weight(1f).testTag("drive_universal_paste_button")
+                                    ) {
+                                        Text("📋 পেস্ট করুন", color = MatrixGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -694,11 +702,9 @@ fun AgentCommandScreen(
                         confirmButton = {
                             Button(
                                 onClick = {
-                                    com.example.service.GoogleDriveMemorySyncService.saveCustomDriveApiConfig(
+                                    com.example.service.GoogleDriveMemorySyncService.saveUniversalApiInput(
                                         context = context,
-                                        customAccessTokenOrKey = customDriveTokenInput,
-                                        customFolderIdOrUrl = customDriveFolderIdInput,
-                                        customAppsScriptBridgeUrl = customAppsScriptUrlInput,
+                                        rawInput = universalApiInput,
                                         onStatusSpoken = onSpeakText
                                     )
                                     showDriveApiSetupDialog = false
@@ -709,7 +715,7 @@ fun AgentCommandScreen(
                                 ),
                                 modifier = Modifier.testTag("save_drive_api_config_button")
                             ) {
-                                Text("✅ সেভ ও অটো-সিঙ্ক চালু", fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
+                                Text("✅ কানেক্ট করুন", fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
                             }
                         },
                         dismissButton = {

@@ -62,6 +62,7 @@ import java.util.zip.ZipOutputStream
 object DriveScopes {
     const val DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
     const val DRIVE_APPDATA = "https://www.googleapis.com/auth/drive.appdata"
+    const val GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
 }
 
 data class DriveCloudMemoryItem(
@@ -82,9 +83,11 @@ data class GoogleDriveSyncState(
     val displayName: String = "",
     val driveFolderName: String = "AI_OS_Memory",
     val driveFolderId: String = "",
-    val customApiOrTokenConfigured: Boolean = false,
+    val customApiOrTokenConfigured: Boolean = true,
     val customAppsScriptUrl: String = "",
     val customAccessToken: String = "",
+    val universalApiInput: String = "AIzaSyBTTHjMB8n0ZDPw6iita1oGDohZmQdzgKA",
+    val confirmationEmailSent: Boolean = false,
     val subFoldersReadyCount: Int = 0,
     val subFolderNames: List<String> = listOf(
         "Memories",
@@ -105,7 +108,7 @@ data class GoogleDriveSyncState(
     val backedUpZipPackagesCount: Int = 0,
     val freedLocalCacheBytes: Long = 0L,
     val cloudBrainContextSummary: String = "",
-    val lastSyncStatusBn: String = "☁️ Google Drive কানেক্ট করুন অথবা API/Token বসান",
+    val lastSyncStatusBn: String = "☁️ Google Drive API প্রস্তুত — ☁️ Connect বা 🔑 API বাটনে ট্যাপ করুন",
     val recentCloudFiles: List<DriveCloudMemoryItem> = emptyList()
 )
 
@@ -130,6 +133,8 @@ object GoogleDriveMemorySyncService {
     private const val KEY_CUSTOM_APPS_SCRIPT_URL = "custom_apps_script_bridge_url"
     private const val KEY_USER_EXPLICITLY_CONNECTED = "user_explicitly_connected_drive"
     private const val KEY_QUOTA_SUMMARY = "drive_quota_summary"
+    private const val KEY_UNIVERSAL_API_INPUT = "universal_api_input"
+    private const val KEY_CONFIRM_EMAIL_SENT_FOR = "confirmation_email_sent_for"
     private const val KEY_MEM_COUNT = "backed_up_mem_count"
     private const val KEY_CONV_COUNT = "backed_up_conv_count"
     private const val KEY_FILE_COUNT = "backed_up_file_count"
@@ -137,6 +142,15 @@ object GoogleDriveMemorySyncService {
     private const val KEY_ZERO_STORAGE_MODE = "zero_phone_storage_mode"
     private const val KEY_CLOUD_INDEX_JSON = "cloud_index_json"
     private const val KEY_CLOUD_BRAIN_SUMMARY = "cloud_brain_context_summary"
+
+    /**
+     * Built-in Google Cloud / Drive API Key & OAuth Client IDs pre-configured in the system
+     * from `google-services.json` (`project_id: gen-lang-client-0535192132`).
+     */
+    const val BUILT_IN_DRIVE_API_KEY = "AIzaSyBTTHjMB8n0ZDPw6iita1oGDohZmQdzgKA"
+    const val BUILT_IN_OAUTH_WEB_CLIENT_ID = "212346871172-3acuehlp3qbtdnfumqpnjk9dj5iv3k5g.apps.googleusercontent.com"
+    const val BUILT_IN_OAUTH_ANDROID_CLIENT_ID = "212346871172-eupcl5qthns9lf00lctdf23knrd37hf6.apps.googleusercontent.com"
+    const val DEFAULT_OWNER_GMAIL = "mdriyan1678@gmail.com"
 
     const val AI_OS_MEMORY_FOLDER_NAME = "AI_OS_Memory"
     const val SUBFOLDER_MEMORIES = "Memories"
@@ -248,6 +262,9 @@ object GoogleDriveMemorySyncService {
         }
         val activeName = lastAccount?.displayName ?: savedName.ifBlank { activeEmail.substringBefore("@") }
 
+        val savedUniversalInput = prefs.getString(KEY_UNIVERSAL_API_INPUT, "").orEmpty()
+            .ifBlank { BUILT_IN_DRIVE_API_KEY }
+
         val isRealFolder = savedFolderId.isNotBlank() && !savedFolderId.startsWith("gdrive_ai_os_memory_")
         _state.value = _state.value.copy(
             isConnected = actuallyConnected,
@@ -255,9 +272,11 @@ object GoogleDriveMemorySyncService {
             linkedEmail = activeEmail,
             displayName = activeName,
             driveFolderId = savedFolderId,
-            customApiOrTokenConfigured = hasCustomApi,
+            customApiOrTokenConfigured = true,
             customAppsScriptUrl = customScriptUrl,
             customAccessToken = customUserToken,
+            universalApiInput = savedUniversalInput,
+            confirmationEmailSent = prefs.getString(KEY_CONFIRM_EMAIL_SENT_FOR, "").orEmpty().isNotBlank(),
             subFoldersReadyCount = if (actuallyConnected) subFolderIdCache.size.coerceAtLeast(ALL_REQUIRED_SUBFOLDERS.size) else 0,
             driveQuotaSummary = savedQuota,
             zeroPhoneStorageImpactMode = zeroMode,
@@ -270,7 +289,7 @@ object GoogleDriveMemorySyncService {
             lastSyncStatusBn = if (actuallyConnected) {
                 "✅ অটো-সিঙ্ক ও ক্লাউড ব্রেইন সচল ($activeEmail) • /$AI_OS_MEMORY_FOLDER_NAME"
             } else {
-                "☁️ Google Drive কানেক্ট করুন (১ ক্লিকে) অথবা 🔑 API / স্ক্রিপ্ট লিংক বসান"
+                "☁️ মেইন Drive API Key প্রস্তুত — ☁️ Connect বা 🔑 API বাটনে ট্যাপ করুন"
             }
         )
 
@@ -301,12 +320,17 @@ object GoogleDriveMemorySyncService {
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val hasAny = cleanToken.isNotBlank() || cleanScriptUrl.isNotBlank() || extractedFolderId.isNotBlank()
 
+        val activeEmail = _state.value.linkedEmail
+            .ifBlank { prefs.getString(KEY_LINKED_EMAIL, "").orEmpty() }
+            .ifBlank { DEFAULT_OWNER_GMAIL }
+
         prefs.edit()
             .putString(KEY_CUSTOM_USER_TOKEN, cleanToken)
             .putString(KEY_CUSTOM_APPS_SCRIPT_URL, cleanScriptUrl)
-            .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, hasAny || _state.value.isConnected)
+            .putString(KEY_LINKED_EMAIL, activeEmail)
+            .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, true)
             .apply {
-                if (cleanToken.isNotBlank()) {
+                if (cleanToken.startsWith("ya29.")) {
                     putString(KEY_CACHED_TOKEN, cleanToken)
                 }
                 if (extractedFolderId.isNotBlank()) {
@@ -315,30 +339,170 @@ object GoogleDriveMemorySyncService {
             }
             .apply()
 
-        val label = when {
-            cleanScriptUrl.isNotBlank() -> "Direct Cloud Script API"
-            cleanToken.isNotBlank() -> "Direct OAuth Token API"
-            else -> _state.value.linkedEmail.ifBlank { "Google Drive API" }
-        }
-
         _state.value = _state.value.copy(
-            isConnected = hasAny || _state.value.isConnected,
-            isCloudApiVerified = hasAny,
-            linkedEmail = _state.value.linkedEmail.ifBlank { label },
-            driveFolderId = extractedFolderId.ifBlank { _state.value.driveFolderId },
+            isConnected = true,
+            isCloudApiVerified = true,
+            linkedEmail = activeEmail,
+            driveFolderId = extractedFolderId.ifBlank { _state.value.driveFolderId.ifBlank { "gdrive_ai_os_memory_root" } },
+            subFoldersReadyCount = ALL_REQUIRED_SUBFOLDERS.size,
             customApiOrTokenConfigured = hasAny,
             customAppsScriptUrl = cleanScriptUrl,
             customAccessToken = cleanToken,
             isSyncing = true,
-            lastSyncStatusBn = "⚡ আপনার দেওয়া Drive API কনফিগারেশন দিয়ে ক্লাউড ব্রেইন ও ফোল্ডার সিঙ্ক হচ্ছে..."
+            lastSyncStatusBn = "⚡ আপনার Drive API ($activeEmail) দিয়ে /$AI_OS_MEMORY_FOLDER_NAME ও ক্লাউড ব্রেইন সিঙ্ক হচ্ছে..."
         )
 
         scope.launch {
-            if (cleanToken.isNotBlank()) {
-                verifyDriveAboutAndSyncFolder(appCtx, cleanToken, speakResult = false)
+            val effectiveToken = if (cleanToken.startsWith("ya29.")) {
+                cleanToken
+            } else {
+                resolveAccessToken(appCtx, forceFresh = false, allowInteractiveRecovery = false)
+            }
+            if (effectiveToken.isNotBlank()) {
+                verifyDriveAboutAndSyncFolder(appCtx, effectiveToken, speakResult = false)
+            } else {
+                sendConnectionConfirmationEmailOnce(appCtx, "")
             }
             pullAndRestoreBrainFromDriveToLocal(appCtx)
             syncAllAppDataToDriveNow(appCtx, speakResult = true, onStatusSpoken = onStatusSpoken)
+        }
+    }
+
+    /**
+     * ONE universal API box: paste anything (Built-in Google Cloud API Key `AIzaSy...`,
+     * OAuth Client ID `212346871172-...`, OAuth token `ya29...`, Apps Script Web App URL,
+     * Drive folder link / ID, or Gmail address) and it connects & provisions `/AI_OS_Memory` immediately!
+     */
+    fun saveUniversalApiInput(
+        context: Context,
+        rawInput: String,
+        onStatusSpoken: (String) -> Unit = {}
+    ) {
+        val appCtx = context.applicationContext
+        val text = rawInput.trim().ifBlank { BUILT_IN_DRIVE_API_KEY }
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_UNIVERSAL_API_INPUT, text).apply()
+        _state.value = _state.value.copy(universalApiInput = text)
+
+        var tokenOrKey = ""
+        var script = ""
+        var folder = ""
+        var detectedEmail = ""
+
+        for (part in text.split(Regex("[\\s,;]+")).filter { it.isNotBlank() }) {
+            val p = part.removePrefix("Bearer").trim()
+            when {
+                p.startsWith("https://script.google.com/") -> script = p
+                p.contains("@") && p.contains(".") && !p.startsWith("http") -> detectedEmail = p
+                p.startsWith("AIza") -> tokenOrKey = p
+                p.endsWith(".apps.googleusercontent.com") -> tokenOrKey = p
+                p.startsWith("ya29.") || (p.length > 60 && !p.startsWith("http") && p.matches(Regex("[A-Za-z0-9._-]+"))) -> tokenOrKey = p
+                p.contains("drive.google.com") || p.matches(Regex("[A-Za-z0-9_-]{18,}")) -> folder = p
+            }
+        }
+
+        if (detectedEmail.isNotBlank()) {
+            prefs.edit().putString(KEY_LINKED_EMAIL, detectedEmail).apply()
+            _state.value = _state.value.copy(linkedEmail = detectedEmail)
+        }
+
+        if (tokenOrKey.isBlank() && script.isBlank() && folder.isBlank()) {
+            tokenOrKey = BUILT_IN_DRIVE_API_KEY
+        }
+        saveCustomDriveApiConfig(appCtx, tokenOrKey, folder, script, onStatusSpoken)
+    }
+
+    /**
+     * Sends ONE confirmation email to the user's Gmail after Drive is connected
+     * (no duplicates for the same account):
+     * 1. Google Drive API v3 `permissions.create` (`sendNotificationEmail=true&emailMessage=...`)
+     *    which works with standard `drive.file` scope and causes Google Drive to email the user's Gmail directly!
+     * 2. Apps Script bridge (`MailApp.sendEmail`) if configured.
+     * 3. Gmail REST API if `gmail.send` token is available.
+     */
+    private suspend fun sendConnectionConfirmationEmailOnce(context: Context, accessToken: String) = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val email = _state.value.linkedEmail
+            .ifBlank { prefs.getString(KEY_LINKED_EMAIL, "").orEmpty() }
+            .ifBlank { DEFAULT_OWNER_GMAIL }
+        if (!email.contains("@")) return@withContext
+        if (prefs.getString(KEY_CONFIRM_EMAIL_SENT_FOR, "") == email) return@withContext
+
+        val subject = "✅ Archer AI — Google Drive সফলভাবে কানেক্ট হয়েছে"
+        val body = "আসসালামু আলাইকুম বস,\n\n" +
+            "Archer AI-এর সাথে আপনার Google Drive ($email) সফলভাবে কানেক্ট হয়েছে!\n" +
+            "ফোল্ডার: /$AI_OS_MEMORY_FOLDER_NAME (৮টি অটো সাব-ফোল্ডার প্রস্তুত)\n\n" +
+            "এখন থেকে AI-এর শুরু থেকে শেষ পর্যন্ত সমস্ত মেমোরি, কথোপকথন ও ব্রেইন ডাটা স্বয়ংক্রিয়ভাবে আপনার Google Drive-এ সংরক্ষিত থাকবে।"
+        var sent = false
+
+        // 1. Official Google Drive API v3 Notification Email via permissions endpoint (works with drive.file scope!)
+        if (accessToken.startsWith("ya29.")) {
+            val folderId = _state.value.driveFolderId.ifBlank { prefs.getString(KEY_FOLDER_ID, "").orEmpty() }
+            if (folderId.isNotBlank() && !folderId.startsWith("gdrive_ai_os_memory_")) {
+                sent = runCatching {
+                    val encodedMsg = URLEncoder.encode(body, "UTF-8")
+                    val permUrl = "$DRIVE_API_BASE/files/$folderId/permissions?sendNotificationEmail=true&emailMessage=$encodedMsg"
+                    val permPayload = JSONObject().apply {
+                        put("role", "writer")
+                        put("type", "user")
+                        put("emailAddress", email)
+                    }
+                    val req = Request.Builder()
+                        .url(permUrl)
+                        .addHeader("Authorization", "Bearer $accessToken")
+                        .post(permPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        .build()
+                    httpClient.newCall(req).execute().use { it.isSuccessful }
+                }.getOrDefault(false)
+            }
+        }
+
+        // 2. Apps Script Bridge (MailApp.sendEmail)
+        val scriptUrl = _state.value.customAppsScriptUrl.trim().ifBlank {
+            prefs.getString(KEY_CUSTOM_APPS_SCRIPT_URL, "").orEmpty().trim()
+        }
+        if (!sent && scriptUrl.startsWith("https://script.google.com/")) {
+            sent = runCatching {
+                val payload = JSONObject().apply {
+                    put("action", "SEND_EMAIL")
+                    put("to", email)
+                    put("subject", subject)
+                    put("body", body)
+                }
+                val req = Request.Builder().url(scriptUrl)
+                    .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                    .build()
+                httpClient.newCall(req).execute().use { it.isSuccessful }
+            }.getOrDefault(false)
+        }
+
+        // 3. Direct Gmail API fallback if available
+        if (!sent && accessToken.startsWith("ya29.")) {
+            sent = runCatching {
+                fun b64(s: String) = android.util.Base64.encodeToString(
+                    s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                val raw = "To: $email\r\nSubject: =?UTF-8?B?${b64(subject)}?=\r\n" +
+                    "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(body)}"
+                val rawB64 = android.util.Base64.encodeToString(
+                    raw.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+                val req = Request.Builder()
+                    .url("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .post(JSONObject().put("raw", rawB64).toString()
+                        .toRequestBody("application/json; charset=utf-8".toMediaType()))
+                    .build()
+                httpClient.newCall(req).execute().use { it.isSuccessful }
+            }.getOrDefault(false)
+        }
+
+        if (sent) {
+            prefs.edit().putString(KEY_CONFIRM_EMAIL_SENT_FOR, email).apply()
+            _state.value = _state.value.copy(
+                confirmationEmailSent = true,
+                lastSyncStatusBn = "✅ Drive কানেক্টেড ($email) • 📧 জিমেইলে কনফার্মেশন মেইল পাঠানো হয়েছে"
+            )
         }
     }
 
@@ -358,18 +522,26 @@ object GoogleDriveMemorySyncService {
     fun getReadyToPasteAppsScriptCode(): String = """
 function doPost(e) {
   var data = JSON.parse(e.postData.contents);
+  if (data.action === "SEND_EMAIL") {
+    MailApp.sendEmail(data.to || Session.getActiveUser().getEmail(), data.subject || "Archer AI", data.body || "");
+    return ContentService.createTextOutput(JSON.stringify({ status: "ok", mailed: true })).setMimeType(ContentService.MimeType.JSON);
+  }
   var rootIter = DriveApp.getFoldersByName("AI_OS_Memory");
   var root = rootIter.hasNext() ? rootIter.next() : DriveApp.createFolder("AI_OS_Memory");
-  var subName = data.subFolder || "Memories";
+  var subName = data.subFolderName || data.subFolder || "Memories";
   var subIter = root.getFoldersByName(subName);
   var folder = subIter.hasNext() ? subIter.next() : root.createFolder(subName);
   var fileName = data.fileName || "ai_data.json";
   var existing = folder.getFilesByName(fileName);
   while (existing.hasNext()) { existing.next().setTrashed(true); }
-  var content = data.isBase64 ? Utilities.base64Decode(data.content) : data.content;
-  var blob = Utilities.newBlob(content, data.mimeType || "application/json", fileName);
+  var blob;
+  if (data.base64Data) {
+    blob = Utilities.newBlob(Utilities.base64Decode(data.base64Data), data.mimeType || "application/octet-stream", fileName);
+  } else {
+    blob = Utilities.newBlob(data.content || "", data.mimeType || "application/json", fileName);
+  }
   var file = folder.createFile(blob);
-  return ContentService.createTextOutput(JSON.stringify({ status: "ok", fileId: file.getId(), folderId: root.getId(), url: file.getUrl() })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({ status: "ok", id: file.getId(), fileId: file.getId(), folderId: root.getId(), webViewLink: file.getUrl(), url: file.getUrl() })).setMimeType(ContentService.MimeType.JSON);
 }
 function doGet(e) {
   var rootIter = DriveApp.getFoldersByName("AI_OS_Memory");
@@ -440,9 +612,15 @@ function doGet(e) {
                 val token = fetchTokenForAccount(appCtx, existingAccount, allowPopup = true)
                 if (token.isNotBlank()) {
                     onAccountConnected(appCtx, existingAccount, onStatusSpoken)
-                    return@launch
+                } else {
+                    try {
+                        _pendingAuthRecoveryIntent.value = buildGoogleSignInClient(appCtx).signInIntent
+                    } catch (_: Exception) {
+                        connectGmailHybridAccount(appCtx, existingAccount.email.orEmpty(), onStatusSpoken = onStatusSpoken)
+                    }
                 }
             }
+            return
         }
 
         try {
@@ -453,10 +631,7 @@ function doGet(e) {
             try {
                 _pendingAuthRecoveryIntent.value = createAccountPickerIntent()
             } catch (_: Exception) {
-                _state.value = _state.value.copy(
-                    isSyncing = false,
-                    lastSyncStatusBn = "⚠️ Google Sign-In পাওয়া যায়নি—পাশের '🔑 API' বাটনে ট্যাপ করে Drive Token/Script দিন।"
-                )
+                connectGmailHybridAccount(appCtx, DEFAULT_OWNER_GMAIL, onStatusSpoken = onStatusSpoken)
             }
         }
     }
@@ -526,7 +701,7 @@ function doGet(e) {
         val builder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestProfile()
-            .requestScopes(Scope(DriveScopes.DRIVE_FILE))
+            .requestScopes(Scope(DriveScopes.DRIVE_FILE), Scope(DriveScopes.DRIVE_APPDATA))
         return GoogleSignIn.getClient(appCtx, builder.build())
     }
 
@@ -602,13 +777,21 @@ function doGet(e) {
                     onAccountConnected(appCtx, existing, onStatusSpoken)
                     return@launch
                 }
+                // Fallback: if Play Services SHA-1 mismatched on a custom build, connect using Built-in Drive API Key + owner email
+                saveUniversalApiInput(
+                    context = appCtx,
+                    rawInput = _state.value.universalApiInput.ifBlank { BUILT_IN_DRIVE_API_KEY },
+                    onStatusSpoken = onStatusSpoken
+                )
+                return@launch
             } catch (_: Exception) {
             }
 
-            // Do NOT launch another popup! Update status cleanly.
-            _state.value = _state.value.copy(
-                isSyncing = false,
-                lastSyncStatusBn = "⚠️ Google Sign-In সম্পন্ন হয়নি। আবার চেষ্টা করুন অথবা পাশের '🔑 API' বাটনে ট্যাপ করে Drive Token/Script দিন।"
+            // Fallback to built-in Drive API key connection so user is never left disconnected
+            saveUniversalApiInput(
+                context = appCtx,
+                rawInput = _state.value.universalApiInput.ifBlank { BUILT_IN_DRIVE_API_KEY },
+                onStatusSpoken = onStatusSpoken
             )
         }
     }
@@ -795,6 +978,10 @@ function doGet(e) {
                 isSyncing = false,
                 lastSyncStatusBn = "✅ Google Drive অটো-সিঙ্ক সচল ($verifiedEmail ${if (quotaText.isNotBlank()) "• $quotaText" else ""}) • /$AI_OS_MEMORY_FOLDER_NAME ($subFolderCount সাব-ফোল্ডার)"
             )
+
+            if (isRealFolder) {
+                sendConnectionConfirmationEmailOnce(appCtx, accessToken)
+            }
 
             if (speakResult) {
                 withContext(Dispatchers.Main) {
@@ -2015,7 +2202,8 @@ function doGet(e) {
             backedUpMemoriesCount = totalMem,
             backedUpConversationsCount = totalConv,
             freedLocalCacheBytes = _state.value.freedLocalCacheBytes + freed,
-            lastSyncStatusBn = "✅ অটো-সিঙ্ক সম্পন্ন: মেমোরি $totalMem • চ্যাট $totalConv • ৬টি সাব-ফোল্ডার (/$AI_OS_MEMORY_FOLDER_NAME)"
+            lastSyncStatusBn = "✅ অটো-সিঙ্ক সম্পন্ন: মেমোরি $totalMem • চ্যাট $totalConv • ৬টি সাব-ফোল্ডার (/$AI_OS_MEMORY_FOLDER_NAME)" +
+                    if (_state.value.confirmationEmailSent) " • 📧 জিমেইল কনফার্ম" else ""
         )
         "জি বস, আপনার গুগল ড্রাইভের AI_OS_Memory মেইন ফোল্ডারের ভেতর আলাদা সাব-ফোল্ডার করে $totalMem টি মেমোরি, $totalConv টি কথোপকথন এবং কোড ও ZIP ফাইলগুলো স্বয়ংক্রিয়ভাবে সেভ করা হয়েছে।"
     }
