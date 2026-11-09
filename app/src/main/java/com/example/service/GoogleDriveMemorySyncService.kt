@@ -250,7 +250,7 @@ object GoogleDriveMemorySyncService {
 
         val lastAccount = runCatching { GoogleSignIn.getLastSignedInAccount(appCtx) }.getOrNull()
         val realSignedInEmail = lastAccount?.email.orEmpty()
-        val hasCustomApi = customUserToken.isNotBlank() || customScriptUrl.isNotBlank()
+        val hasCustomApi = customUserToken.startsWith("ya29.") || customScriptUrl.isNotBlank()
 
         // NEVER show a fake pre-connected account unless the user actually signed in or configured an API/Bridge!
         val actuallyConnected = explicitlyConnected || realSignedInEmail.isNotBlank() || hasCustomApi
@@ -324,8 +324,11 @@ object GoogleDriveMemorySyncService {
             .ifBlank { prefs.getString(KEY_LINKED_EMAIL, "").orEmpty() }
             .ifBlank { DEFAULT_OWNER_GMAIL }
 
+        // Only a real OAuth token (ya29...) may be used as a Bearer token. API keys (AIza...) and
+        // OAuth client IDs must never override the signed-in Gmail account's token.
+        val bearerToken = if (cleanToken.startsWith("ya29.")) cleanToken else ""
         prefs.edit()
-            .putString(KEY_CUSTOM_USER_TOKEN, cleanToken)
+            .putString(KEY_CUSTOM_USER_TOKEN, bearerToken)
             .putString(KEY_CUSTOM_APPS_SCRIPT_URL, cleanScriptUrl)
             .putString(KEY_LINKED_EMAIL, activeEmail)
             .putBoolean(KEY_USER_EXPLICITLY_CONNECTED, true)
@@ -341,13 +344,13 @@ object GoogleDriveMemorySyncService {
 
         _state.value = _state.value.copy(
             isConnected = true,
-            isCloudApiVerified = true,
+            isCloudApiVerified = bearerToken.isNotBlank() || cleanScriptUrl.isNotBlank(),
             linkedEmail = activeEmail,
             driveFolderId = extractedFolderId.ifBlank { _state.value.driveFolderId.ifBlank { "gdrive_ai_os_memory_root" } },
             subFoldersReadyCount = ALL_REQUIRED_SUBFOLDERS.size,
             customApiOrTokenConfigured = hasAny,
             customAppsScriptUrl = cleanScriptUrl,
-            customAccessToken = cleanToken,
+            customAccessToken = bearerToken,
             isSyncing = true,
             lastSyncStatusBn = "⚡ আপনার Drive API ($activeEmail) দিয়ে /$AI_OS_MEMORY_FOLDER_NAME ও ক্লাউড ব্রেইন সিঙ্ক হচ্ছে..."
         )
@@ -415,10 +418,10 @@ object GoogleDriveMemorySyncService {
     /**
      * Sends ONE confirmation email to the user's Gmail after Drive is connected
      * (no duplicates for the same account):
-     * 1. Google Drive API v3 `permissions.create` (`sendNotificationEmail=true&emailMessage=...`)
-     *    which works with standard `drive.file` scope and causes Google Drive to email the user's Gmail directly!
+     * 0. Gmail REST API with a dedicated silent `gmail.send` token (lands in the inbox, works for self-mail).
+     * 1. Google Drive API v3 `permissions.create` (`sendNotificationEmail=true&emailMessage=...`).
      * 2. Apps Script bridge (`MailApp.sendEmail`) if configured.
-     * 3. Gmail REST API if `gmail.send` token is available.
+     * 3. Gmail REST API with the Drive token as the last fallback.
      */
     private suspend fun sendConnectionConfirmationEmailOnce(context: Context, accessToken: String) = withContext(Dispatchers.IO) {
         val appCtx = context.applicationContext
@@ -436,8 +439,16 @@ object GoogleDriveMemorySyncService {
             "এখন থেকে AI-এর শুরু থেকে শেষ পর্যন্ত সমস্ত মেমোরি, কথোপকথন ও ব্রেইন ডাটা স্বয়ংক্রিয়ভাবে আপনার Google Drive-এ সংরক্ষিত থাকবে।"
         var sent = false
 
-        // 1. Official Google Drive API v3 Notification Email via permissions endpoint (works with drive.file scope!)
-        if (accessToken.startsWith("ya29.")) {
+        // 0. Gmail API (gmail.send) - delivers straight into the owner's inbox even for self-mail.
+        //    Uses its own token request so a missing Gmail consent can never break Drive sign-in.
+        val gmailToken = fetchGmailSendTokenSilently(appCtx, email)
+        if (gmailToken.isNotBlank()) {
+            sent = sendViaGmailApi(gmailToken, email, subject, body)
+        }
+
+        // 1. Official Google Drive API v3 Notification Email via permissions endpoint
+        //    (Google refuses to "share" with the owner himself, so this only helps for a different address)
+        if (!sent && accessToken.startsWith("ya29.")) {
             val folderId = _state.value.driveFolderId.ifBlank { prefs.getString(KEY_FOLDER_ID, "").orEmpty() }
             if (folderId.isNotBlank() && !folderId.startsWith("gdrive_ai_os_memory_")) {
                 sent = runCatching {
@@ -477,24 +488,9 @@ object GoogleDriveMemorySyncService {
             }.getOrDefault(false)
         }
 
-        // 3. Direct Gmail API fallback if available
-        if (!sent && accessToken.startsWith("ya29.")) {
-            sent = runCatching {
-                fun b64(s: String) = android.util.Base64.encodeToString(
-                    s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
-                val raw = "To: $email\r\nSubject: =?UTF-8?B?${b64(subject)}?=\r\n" +
-                    "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(body)}"
-                val rawB64 = android.util.Base64.encodeToString(
-                    raw.toByteArray(Charsets.UTF_8),
-                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
-                val req = Request.Builder()
-                    .url("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
-                    .addHeader("Authorization", "Bearer $accessToken")
-                    .post(JSONObject().put("raw", rawB64).toString()
-                        .toRequestBody("application/json; charset=utf-8".toMediaType()))
-                    .build()
-                httpClient.newCall(req).execute().use { it.isSuccessful }
-            }.getOrDefault(false)
+        // 3. Last fallback: Gmail API with the Drive token (works only if it also carries gmail.send)
+        if (!sent && accessToken.startsWith("ya29.") && accessToken != gmailToken) {
+            sent = sendViaGmailApi(accessToken, email, subject, body)
         }
 
         if (sent) {
@@ -503,8 +499,50 @@ object GoogleDriveMemorySyncService {
                 confirmationEmailSent = true,
                 lastSyncStatusBn = "✅ Drive কানেক্টেড ($email) • 📧 জিমেইলে কনফার্মেশন মেইল পাঠানো হয়েছে"
             )
+        } else {
+            // Not marked as sent -> will be retried automatically on the next connect / app start
+            _state.value = _state.value.copy(
+                lastSyncStatusBn = "✅ Drive কানেক্টেড ($email) • 📧 কনফার্মেশন মেইল পরে আবার চেষ্টা হবে"
+            )
         }
+        Unit
     }
+
+    /**
+     * Silent (no popup) token request for the `gmail.send` scope only.
+     * Returns "" if the user has not granted it - never launches any consent screen.
+     */
+    private suspend fun fetchGmailSendTokenSilently(context: Context, email: String): String =
+        withContext(Dispatchers.IO) {
+            val appCtx = context.applicationContext
+            val acct: Account = runCatching { GoogleSignIn.getLastSignedInAccount(appCtx)?.account }.getOrNull()
+                ?: email.takeIf { it.contains("@") }?.let { Account(it, "com.google") }
+                ?: return@withContext ""
+            try {
+                GoogleAuthUtil.getToken(appCtx, acct, "oauth2:${DriveScopes.GMAIL_SEND}")
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
+    private fun sendViaGmailApi(token: String, to: String, subject: String, body: String): Boolean =
+        runCatching {
+            fun b64(s: String) = android.util.Base64.encodeToString(
+                s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+            val raw = "To: $to\r\nSubject: =?UTF-8?B?${b64(subject)}?=\r\n" +
+                "MIME-Version: 1.0\r\n" +
+                "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(body)}"
+            val rawB64 = android.util.Base64.encodeToString(
+                raw.toByteArray(Charsets.UTF_8),
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+            val req = Request.Builder()
+                .url("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+                .addHeader("Authorization", "Bearer $token")
+                .post(JSONObject().put("raw", rawB64).toString()
+                    .toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        }.getOrDefault(false)
 
     private fun extractDriveFolderIdFromInput(raw: String): String {
         if (raw.isBlank()) return ""
@@ -701,7 +739,7 @@ function doGet(e) {
         val builder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestProfile()
-            .requestScopes(Scope(DriveScopes.DRIVE_FILE), Scope(DriveScopes.DRIVE_APPDATA))
+            .requestScopes(Scope(DriveScopes.DRIVE_FILE), Scope(DriveScopes.DRIVE_APPDATA), Scope(DriveScopes.GMAIL_SEND))
         return GoogleSignIn.getClient(appCtx, builder.build())
     }
 
@@ -1081,6 +1119,7 @@ function doGet(e) {
         val appCtx = context.applicationContext
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val customUserToken = prefs.getString(KEY_CUSTOM_USER_TOKEN, "").orEmpty()
+            .takeIf { it.startsWith("ya29.") }.orEmpty()
         if (customUserToken.isNotBlank() && !forceFresh) {
             return@withContext customUserToken
         }

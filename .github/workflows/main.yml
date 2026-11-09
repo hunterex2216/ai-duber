@@ -60,11 +60,18 @@ jobs:
           if [ ! -f .env ]; then
             cp .env.example .env 2>/dev/null || touch .env
           fi
-          if [ ! -f debug.keystore ]; then
+          # Decode the REAL debug keystore so the APK SHA-1 matches Google Cloud (Gmail sign-in fix)
+          if [ -f debug.keystore.base64 ]; then
+            tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore
+            echo "debug.keystore decoded from debug.keystore.base64"
+          elif [ ! -f debug.keystore ]; then
+            echo "::warning::debug.keystore.base64 NOT found - generating a random keystore. Gmail sign-in will FAIL (SHA-1 mismatch). Upload debug.keystore.base64 to the repo root."
             keytool -genkeypair -keystore debug.keystore -storepass android \
               -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
               -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
+          echo "---- keystore SHA-1 (must be 7b:3f:a5:ea:1c:7d:f9:6b:5d:73:3c:bc:02:87:7a:da:8d:00:ee:d6) ----"
+          keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -E "SHA1|SHA-1" || true
           echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" >> gradle.properties
 
       - name: Build debug APK

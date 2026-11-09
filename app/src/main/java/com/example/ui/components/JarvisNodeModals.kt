@@ -234,7 +234,7 @@ fun MemoryAndPlatformIdsSheet(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "📂 অটো সাব-ফোল্ডার: /Memories • /Conversations • /Argon4_Code • /ZIP_Packages • /Media_Screenshots • /Master_Backups",
+                            text = "📂 অটো সাব-ফোল্ডার: /Memories • /Conversations • /Voice_Profiles • /Argon4_Code • /ZIP_Packages • /Media_Screenshots • /Cloud_Bots • /Master_Backups",
                             color = CyberCyan,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium

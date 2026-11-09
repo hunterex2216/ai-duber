@@ -488,7 +488,8 @@ fun AgentCommandScreen(
                         )
                         Text(
                             text = if (driveSyncState.isConnected) {
-                                "অটো-সিঙ্ক ও লাইভ ব্রেইন সচল: মেমোরি ${driveSyncState.backedUpMemoriesCount} • চ্যাট ${driveSyncState.backedUpConversationsCount} • কোড ${driveSyncState.backedUpScreenshotsAndFilesCount} • ZIP ${driveSyncState.backedUpZipPackagesCount}"
+                                "অটো-সিঙ্ক ও লাইভ ব্রেইন সচল: মেমোরি ${driveSyncState.backedUpMemoriesCount} • চ্যাট ${driveSyncState.backedUpConversationsCount} • কোড ${driveSyncState.backedUpScreenshotsAndFilesCount} • ZIP ${driveSyncState.backedUpZipPackagesCount}" +
+                                    (if (driveSyncState.confirmationEmailSent) " • 📧 জিমেইল কনফার্মড" else "")
                             } else {
                                 driveSyncState.lastSyncStatusBn
                             },
