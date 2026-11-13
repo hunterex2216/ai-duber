@@ -657,12 +657,13 @@ class MultimodalLiveService(
 
     private fun voiceBiometricsControlDecl() = toolDecl(
         "voice_biometrics_control",
-        "Biometric Speaker Identification, Owner Voice Lock & Real-Time Male/Female/Child Gender Detection (`VoiceBiometricsEngine`): Enroll Boss's voice ('বসের ভয়েস লক / আমার কণ্ঠ লক করো'), enroll friends/family by voice command (e.g. 'এই কণ্ঠটা সিয়ামের নামে সেভ রাখো'), check who is currently speaking & their gender ('ছেলে' Male / 'মেয়ে' Female / 'শিশু' Child) and pitch Hz, delete a voice profile, or toggle the Voice Security Gate.",
+        "Advanced Biometric Speaker Identification, Mood & Tone Detection, Noise Calibration, Anti-Spoofing Shield, Role Permissions & Owner Voice Lock (`VoiceBiometricsEngine`).",
         listOf(
-            "operation" to "One of: ENROLL_BOSS_VOICE, ENROLL_GUEST_VOICE, WHO_IS_SPEAKING, UPDATE_GENDER_PERCEPTION, SET_VOICE_LOCK, DELETE_VOICE_PROFILE",
-            "speaker_name" to "Name of the speaker to enroll or delete (e.g. 'বস', 'সিয়াম', 'রাহাত', 'মীম')",
+            "operation" to "One of: ENROLL_BOSS_VOICE, ENROLL_GUEST_VOICE, WHO_IS_SPEAKING, GET_MOOD_AND_TELEMETRY, UPDATE_GENDER_PERCEPTION, SET_VOICE_LOCK, SET_ANTI_SPOOF_STRICT, CALIBRATE_NOISE, SET_SPEAKER_ROLE, DELETE_VOICE_PROFILE",
+            "speaker_name" to "Name of the speaker to enroll, assign role, or delete (e.g. 'বস', 'সিয়াম', 'রাহাত', 'মীম')",
+            "speaker_role" to "When operation='SET_SPEAKER_ROLE': OWNER_BOSS, TRUSTED_FAMILY, GUEST_FRIEND, or RESTRICTED_CHILD",
             "gender_hint" to "Optional gender/age perception from live audio: MALE ('ছেলে'), FEMALE ('মেয়ে'), or CHILD ('শিশু')",
-            "lock_enabled" to "When operation='SET_VOICE_LOCK': 'ON' or 'OFF'"
+            "lock_enabled" to "When operation='SET_VOICE_LOCK' or 'SET_ANTI_SPOOF_STRICT': 'ON' or 'OFF'"
         ),
         listOf("operation")
     )

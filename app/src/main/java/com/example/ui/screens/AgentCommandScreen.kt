@@ -34,11 +34,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.GraphicEq
@@ -46,15 +43,12 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.LaptopChromebook
-import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -91,7 +85,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -122,11 +115,11 @@ import com.example.ui.components.LiveCameraAndScreenVisionSheet
 import com.example.ui.components.MatrixGreen
 import com.example.ui.components.MemoryAndPlatformIdsSheet
 import com.example.ui.components.MultimodalLiveApiHubSheet
-import com.example.ui.components.MultimodalLiveHudOverlayCard
-import com.example.ui.components.MultimodalLiveStudioBar
 import com.example.ui.components.LiveCompactBar
 import com.example.ui.components.SettingsAndPermissionsSheet
 import com.example.ui.components.SoulAndMusicWakeSheet
+import com.example.ui.components.UpgradedVoiceBiometricsHudBar
+import com.example.ui.components.VoiceBiometricsDetailSheet
 import com.example.ui.theme.PulseRose
 import com.example.viewmodel.AgentUiState
 
@@ -288,10 +281,8 @@ fun AgentCommandScreen(
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            onSetHandsFreeVoice(true)
-        }
+    ) { _ ->
+        // Gemini Live owns the microphone directly; keep legacy STT off until explicitly tapped
     }
 
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -299,9 +290,7 @@ fun AgentCommandScreen(
             context,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
-        if (hasMicPerm) {
-            onSetHandsFreeVoice(true)
-        } else {
+        if (!hasMicPerm) {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
@@ -697,40 +686,9 @@ fun AgentCommandScreen(
                     onToggleTts = onToggleTts,
                     onOpenApiKeyClick = { showQuickGeminiKeyDialog = true }
                 )
-
-                // 5. TODAY TASKS & 5TB CLOUD BOT ACTIVITY
-                ArcherTodayTasksCard(
-                    tasks = todayTasks,
-                    onToggleTask = onToggleTodayTask,
-                    onOpenTasksModal = { onOpenModal(JarvisNodeModal.CHAT_AND_MESSAGES) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 2.dp)
-                )
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // 5B. Hands-Free Speech-to-Text (RecognitionListener) Control Bar
-            ArcherHandsFreeVoiceControlStrip(
-                voiceState = voiceState,
-                onToggleHandsFree = {
-                    val hasMicPerm = ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.RECORD_AUDIO
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (hasMicPerm) {
-                        onToggleHandsFreeVoice()
-                    } else {
-                        onToggleHandsFreeVoice()
-                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }
-                },
-                onCycleLanguage = onCycleSttLanguage,
-                onTriggerVoiceNow = requestOrToggleVoiceListening
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // 6. Visible Archer Cyber Typing & Auto-Type Bar right at the bottom of the main screen
             ArcherCyberTypingBar(
@@ -970,145 +928,6 @@ fun AgentCommandScreen(
                     CubeSentinelBus.setLockScreenHudMode(false)
                 }
             )
-        }
-    }
-}
-
-@Composable
-private fun ArcherHandsFreeVoiceControlStrip(
-    voiceState: VoiceBridgeState,
-    onToggleHandsFree: () -> Unit,
-    onCycleLanguage: () -> Unit,
-    onTriggerVoiceNow: () -> Unit
-) {
-    val stripShape = RoundedCornerShape(12.dp)
-    val shortLangBadge = when {
-        voiceState.languageCode.startsWith("bn") -> "বাংলা"
-        voiceState.languageCode.startsWith("hi") -> "हिन्दी"
-        else -> "ENG"
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(stripShape)
-            .background(
-                if (voiceState.isListening) Color(0xFF1A0911)
-                else Color(0xFF061A12)
-            )
-            .border(
-                width = 1.1.dp,
-                color = when {
-                    voiceState.isListening -> PulseRose
-                    voiceState.isHandsFreeContinuous -> MatrixGreen
-                    else -> CyberCyan.copy(alpha = 0.55f)
-                },
-                shape = stripShape
-            )
-            .padding(horizontal = 8.dp, vertical = 5.dp)
-            .testTag("hands_free_voice_strip"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // 1. Hands-Free Continuous Mode Toggle Pill
-        Surface(
-            color = if (voiceState.isHandsFreeContinuous) MatrixGreen else Color(0xFF0B241A),
-            shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(
-                1.dp,
-                if (voiceState.isHandsFreeContinuous) MatrixGreen else CyberCyan.copy(alpha = 0.6f)
-            ),
-            modifier = Modifier
-                .clickable { onToggleHandsFree() }
-                .testTag("hands_free_mode_toggle_btn")
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.GraphicEq,
-                    contentDescription = "Hands-Free Voice Mode",
-                    tint = if (voiceState.isHandsFreeContinuous) Color(0xFF02140B) else MatrixGreen,
-                    modifier = Modifier.size(13.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = if (voiceState.isHandsFreeContinuous) "HANDS-FREE ON" else "HANDS-FREE",
-                    color = if (voiceState.isHandsFreeContinuous) Color(0xFF02140B) else MatrixGreen,
-                    fontFamily = FontFamily.SansSerif,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 8.8.sp
-                )
-            }
-        }
-
-        // 2. Live STT Status / Partial Transcript Preview
-        Text(
-            text = when {
-                voiceState.isListening && voiceState.partialTranscript.isNotBlank() ->
-                    "🎙️ \"${voiceState.partialTranscript}\""
-                voiceState.isListening ->
-                    "● শুনছি (${shortLangBadge})... এখন মুখে আদেশ বলুন"
-                voiceState.isHandsFreeContinuous ->
-                    "হ্যান্ডস-ফ্রি মাইক প্রস্তুত — টাইপ ছাড়াই কথা বলুন"
-                else ->
-                    voiceState.statusHint
-            },
-            color = if (voiceState.isListening) Color.White else Color(0xFFC8F7E5),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-
-        // 3. Language Switcher Pill (বাংলা / ENG / हिन्दी)
-        Surface(
-            color = Color(0xFF082226),
-            shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, CyberCyan.copy(alpha = 0.75f)),
-            modifier = Modifier
-                .clickable { onCycleLanguage() }
-                .testTag("stt_language_cycle_btn")
-        ) {
-            Text(
-                text = "🌐 $shortLangBadge",
-                color = CyberCyan,
-                fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 8.8.sp,
-                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp)
-            )
-        }
-
-        // 4. Direct Voice Trigger Pill ("বলুন / থামান")
-        Surface(
-            color = if (voiceState.isListening) PulseRose else CyberCyan,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-                .clickable { onTriggerVoiceNow() }
-                .testTag("hands_free_speak_now_btn")
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = if (voiceState.isListening) Icons.Default.MicOff else Icons.Default.Mic,
-                    contentDescription = "Speak Command",
-                    tint = if (voiceState.isListening) Color.White else Color(0xFF021619),
-                    modifier = Modifier.size(13.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
-                Text(
-                    text = if (voiceState.isListening) "থামান" else "বলুন",
-                    color = if (voiceState.isListening) Color.White else Color(0xFF021619),
-                    fontFamily = FontFamily.SansSerif,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 9.sp
-                )
-            }
         }
     }
 }
@@ -1972,328 +1791,6 @@ private fun ArcherTranscriptBox(
 }
 
 @Composable
-private fun ArcherSystemTelemetryStrip(
-    batteryPercent: Int,
-    isWifiOnline: Boolean
-) {
-    val stripShape = RoundedCornerShape(12.dp)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(stripShape)
-            .background(Color(0xFF061E12))
-            .border(1.dp, MatrixGreen.copy(alpha = 0.45f), stripShape)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Default.BatteryChargingFull,
-                contentDescription = null,
-                tint = MatrixGreen,
-                modifier = Modifier.size(13.dp)
-            )
-            Spacer(modifier = Modifier.width(3.dp))
-            Text(
-                text = "BAT ${batteryPercent}% ⚡",
-                color = MatrixGreen,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 9.5.sp
-            )
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Default.Memory,
-                contentDescription = null,
-                tint = CyberCyan,
-                modifier = Modifier.size(13.dp)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                text = "RAM 2.4GB FREE",
-                color = CyberCyan,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 9.5.sp
-            )
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Default.Wifi,
-                contentDescription = null,
-                tint = Color(0xFFFF9100),
-                modifier = Modifier.size(13.dp)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                text = if (isWifiOnline) "WI-FI ONLINE" else "OFFLINE",
-                color = Color(0xFFFF9100),
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 9.5.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun ArcherMessageSignalBar(
-    latestSender: String,
-    latestBody: String,
-    onAskWhoSentMessage: () -> Unit,
-    onAskWhatIsMessage: () -> Unit,
-    onTestIncomingCall: () -> Unit
-) {
-    val barShape = RoundedCornerShape(14.dp)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(barShape)
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF072215),
-                        Color(0xFF04140C)
-                    )
-                )
-            )
-            .border(1.2.dp, MatrixGreen.copy(alpha = 0.55f), barShape)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
-    ) {
-        Text(
-            text = "💬 NEW MESSAGE SIGNAL WAITING (বলুন: 'কোথা থেকে মেসেজ আসছে?')",
-            color = Color.White,
-            fontFamily = FontFamily.SansSerif,
-            fontWeight = FontWeight.Bold,
-            fontSize = 9.5.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Pill 1: ১. কোথা থেকে মেসেজ আসছে?
-            Surface(
-                color = Color(0xFF062326),
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.1.dp, CyberCyan),
-                modifier = Modifier
-                    .weight(1.25f)
-                    .clickable { onAskWhoSentMessage() }
-                    .testTag("signal_btn_who_sent")
-            ) {
-                Text(
-                    text = "১. কোথা থেকে মেসেজ আসছে?",
-                    color = CyberCyan,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 8.8.sp,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
-                )
-            }
-
-            // Pill 2: ২. কী মেসেজ?
-            Surface(
-                color = Color(0xFF072816),
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.1.dp, MatrixGreen),
-                modifier = Modifier
-                    .weight(0.85f)
-                    .clickable { onAskWhatIsMessage() }
-                    .testTag("signal_btn_what_message")
-            ) {
-                Text(
-                    text = "২. কী মেসেজ?",
-                    color = MatrixGreen,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 9.sp,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
-                )
-            }
-
-            // Pill 3: 📞 টেস্ট ইনকামিং কল
-            Surface(
-                color = Color(0xFF241606),
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.1.dp, Color(0xFFFF9100)),
-                modifier = Modifier
-                    .weight(1.1f)
-                    .clickable { onTestIncomingCall() }
-                    .testTag("signal_btn_test_call")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Call,
-                        contentDescription = null,
-                        tint = Color(0xFFFF9100),
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Spacer(modifier = Modifier.width(3.dp))
-                    Text(
-                        text = "টেস্ট ইনকামিং কল",
-                        color = Color(0xFFFF9100),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 8.8.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ArcherTodayTasksCard(
-    tasks: List<TodayTaskEntity>,
-    onToggleTask: (TodayTaskEntity) -> Unit,
-    onOpenTasksModal: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val cardShape = RoundedCornerShape(16.dp)
-    val leftCount = tasks.count { !it.isCompleted }.coerceAtLeast(0)
-    val completedCount = tasks.count { it.isCompleted }
-    val totalCount = tasks.size.coerceAtLeast(1)
-    val progress = ((completedCount + 1).toFloat() / (totalCount + 1).toFloat()).coerceIn(0.35f, 1f)
-
-    Column(
-        modifier = modifier
-            .clip(cardShape)
-            .background(Color(0xFF060E0B))
-            .border(1.2.dp, Color(0xFF90B4AE).copy(alpha = 0.7f), cardShape)
-            .padding(horizontal = 12.dp, vertical = 12.dp)
-            .testTag("today_tasks_panel"),
-        verticalArrangement = Arrangement.spacedBy(9.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onOpenTasksModal() },
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "TODAY TASKS",
-                    color = Color.White,
-                    fontFamily = FontFamily.SansSerif,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 10.sp,
-                    letterSpacing = 0.5.sp
-                )
-                Text(
-                    text = "${leftCount} left",
-                    color = Color(0xFFB0CFCB),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 3.dp)
-                )
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.LocalFireDepartment,
-                    contentDescription = null,
-                    tint = Color(0xFFFF9100),
-                    modifier = Modifier.size(13.dp)
-                )
-                Text(
-                    text = "1",
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(start = 2.dp)
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(15.dp)
-                )
-            }
-        }
-
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-        ) {
-            val y = size.height / 2f
-            drawLine(
-                color = Color(0xFF1A3330),
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
-                strokeWidth = 3.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            val activeEndX = size.width * progress
-            drawLine(
-                color = CyberCyan,
-                start = Offset(0f, y),
-                end = Offset(activeEndX, y),
-                strokeWidth = 3.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            drawCircle(
-                color = CyberCyan.copy(alpha = 0.45f),
-                radius = 6.dp.toPx(),
-                center = Offset(activeEndX * 0.45f, y)
-            )
-            drawCircle(
-                color = Color.White,
-                radius = 2.5.dp.toPx(),
-                center = Offset(activeEndX * 0.45f, y)
-            )
-        }
-
-        tasks.take(4).forEach { task ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onToggleTask(task) }
-                    .padding(vertical = 1.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(if (task.isCompleted) MatrixGreen else Color.Transparent)
-                        .border(1.4.dp, CyberCyan, CircleShape)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = task.title,
-                    color = if (task.isCompleted) Color(0xFF7B9E99) else Color(0xFFEAF7F5),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun LockScreenCubeWakeOverlay(
     sentinelState: CubeSentinelState,
     voiceState: VoiceBridgeState,
@@ -2449,135 +1946,29 @@ private fun VoiceBiometricsHudPillBar(
     val context = LocalContext.current
     val bioState by com.example.service.VoiceBiometricsEngine.state.collectAsState()
     var showBossCalibrationDialog by remember { mutableStateOf(false) }
-    var showGuestEnrollDialog by remember { mutableStateOf(false) }
-    var guestNameInput by remember { mutableStateOf("") }
+    var showDetailSheet by remember { mutableStateOf(false) }
+    var detailSheetInitialTab by remember { mutableStateOf(0) }
 
-    val borderColor = when {
-        bioState.isEnrolling -> Color(0xFFF59E0B)
-        bioState.isOwnerBossVerified && bioState.hasOwnerBossProfile -> MatrixGreen.copy(alpha = 0.78f)
-        bioState.isKnownEnrolledSpeaker -> CyberCyan.copy(alpha = 0.78f)
-        else -> Color(0xFF334155)
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF0B0F19))
-            .border(1.dp, borderColor, RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-            .testTag("hud_voice_biometrics_pill")
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = bioState.liveHudBadgeText,
-                    color = when {
-                        bioState.isEnrolling -> Color(0xFFFBBF24)
-                        bioState.isOwnerBossVerified && bioState.hasOwnerBossProfile -> MatrixGreen
-                        bioState.isKnownEnrolledSpeaker -> CyberCyan
-                        else -> Color(0xFFE2E8F0)
-                    },
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val activeProfileStyle = bioState.enrolledProfiles
-                    .firstOrNull { it.speakerName == bioState.activeSpeakerName }
-                    ?.speakingStyleSummaryBn
-                    .orEmpty()
-                Text(
-                    text = buildString {
-                        append("কণ্ঠ: ${bioState.detectedGender.labelBn}")
-                        if (bioState.currentPitchHz > 0) {
-                            append(" • ${bioState.currentPitchHz}Hz")
-                        }
-                        if (activeProfileStyle.isNotBlank()) {
-                            append(" • ধরন: $activeProfileStyle")
-                        }
-                        append(" • প্রোফাইল: ${bioState.enrolledProfiles.size}টি")
-                    },
-                    color = Color(0xFF94A3B8),
-                    fontSize = 9.3.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Spacer(modifier = Modifier.width(6.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = { showBossCalibrationDialog = true },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (bioState.hasOwnerBossProfile) MatrixGreen else Color(0xFF38BDF8),
-                        contentColor = Color.Black
-                    ),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    modifier = Modifier
-                        .height(30.dp)
-                        .testTag("enroll_boss_voice_lock_button")
-                ) {
-                    Text(
-                        text = if (bioState.isEnrolling && bioState.enrollmentIsOwnerBoss) {
-                            "⏳ ধাপ ${bioState.enrollmentStepIndex + 1}/৩ (${bioState.enrollmentProgressPercent}%)"
-                        } else if (bioState.hasOwnerBossProfile) {
-                            "🎙️ বসের ভয়েস ট্রেনিং"
-                        } else {
-                            "🔒 বসের ভয়েস লক"
-                        },
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = { showGuestEnrollDialog = true },
-                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.7f)),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp),
-                    modifier = Modifier
-                        .height(30.dp)
-                        .testTag("enroll_guest_voice_button")
-                ) {
-                    Text(
-                        text = "➕ বক্তা (${bioState.enrolledProfiles.size})",
-                        color = Color(0xFF38BDF8),
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
+    UpgradedVoiceBiometricsHudBar(
+        onOpenDetailSheet = { tab ->
+            detailSheetInitialTab = tab
+            showDetailSheet = true
+        },
+        onQuickBossEnroll = {
+            showBossCalibrationDialog = true
+        },
+        onQuickGuestEnroll = {
+            detailSheetInitialTab = 1
+            showDetailSheet = true
         }
+    )
 
-        if (bioState.isEnrolling && bioState.currentCalibrationSentenceBn.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "🗣️ এখন বলুন (ধাপ ${bioState.enrollmentStepIndex + 1}/৩): \"${bioState.currentCalibrationSentenceBn}\"",
-                color = Color(0xFFFBBF24),
-                fontSize = 10.2.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
-        }
-
-        if (bioState.lastSecurityGateEventBn.isNotBlank()) {
-            Spacer(modifier = Modifier.height(3.dp))
-            Text(
-                text = bioState.lastSecurityGateEventBn,
-                color = Color(0xFFF87171),
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+    if (showDetailSheet) {
+        VoiceBiometricsDetailSheet(
+            initialTab = detailSheetInitialTab,
+            onSpeakStatus = onSpeakStatus,
+            onDismiss = { showDetailSheet = false }
+        )
     }
 
     if (showBossCalibrationDialog) {
@@ -2598,7 +1989,7 @@ private fun VoiceBiometricsHudPillBar(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "নিচের বাটনে ট্যাপ করে এই ৩টি বাক্য বা ওয়ার্ডগুলো স্বাভাবিক গলায় বলুন। সিস্টেম আপনার মেইন কণ্ঠস্বর, পিচ (${bioState.currentPitchHz}Hz) ও কথা বলার ধরন চিনে নেবে:",
+                        text = "নিচের বাটনে ট্যাপ করে এই ৩টি বাক্য স্বাভাবিক গলায় বলুন। সিস্টেম আপনার মেইন কণ্ঠস্বর, পিচ (${bioState.currentPitchHz}Hz), মুড ও লiveness প্রোফাইল Google Drive-এ লক করে রাখবে:",
                         color = Color(0xFFCBD5E1),
                         fontSize = 11.2.sp,
                         lineHeight = 15.sp
@@ -2674,12 +2065,20 @@ private fun VoiceBiometricsHudPillBar(
                         }
                     }
 
-                    Text(
-                        text = "🤖 অটো-গেস্ট লার্নিং চালু আছে: অন্য কেউ কথা বললে AI আগে তার নাম জিজ্ঞেস করবে এবং নাম বললেই তার কণ্ঠ ও কথা বলার সব ধরন স্বয়ংক্রিয়ভাবে চিনে Google Drive-এ সেভ করে নেবে!",
-                        color = Color(0xFFA7F3D0),
-                        fontSize = 10.2.sp,
-                        lineHeight = 14.sp
-                    )
+                    TextButton(
+                        onClick = {
+                            showBossCalibrationDialog = false
+                            detailSheetInitialTab = 0
+                            showDetailSheet = true
+                        }
+                    ) {
+                        Text(
+                            text = "🎛️ সম্পূর্ণ বায়োমেট্রিক্স প্যানেল, নয়েজ ক্যালিব্রেট ও রোল দেখুন →",
+                            color = CyberCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -2710,125 +2109,6 @@ private fun VoiceBiometricsHudPillBar(
             },
             dismissButton = {
                 TextButton(onClick = { showBossCalibrationDialog = false }) {
-                    Text("বন্ধ করুন", color = Color(0xFF94A3B8))
-                }
-            }
-        )
-    }
-
-    if (showGuestEnrollDialog) {
-        AlertDialog(
-            onDismissRequest = { showGuestEnrollDialog = false },
-            containerColor = Color(0xFF1E293B),
-            title = {
-                Text(
-                    text = "🎙️ পরিচিত বক্তার তালিকা ও নতুন কণ্ঠ সেভ",
-                    color = Color.White,
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "অন্য কেউ কথা বলার সময় শুধু নিজের নাম বললেই (যেমন: 'আমার নাম সিয়াম') AI নিজে থেকেই তার কণ্ঠ ও কথা বলার ধরন চিনে নেয়! এছাড়া নিচে নাম লিখে ম্যানুয়ালিও সেভ করতে পারেন:",
-                        color = Color(0xFFCBD5E1),
-                        fontSize = 11.2.sp
-                    )
-                    OutlinedTextField(
-                        value = guestNameInput,
-                        onValueChange = { guestNameInput = it },
-                        label = { Text("বক্তার নাম (যেমন: সিয়াম, রাহাত, মীম)", color = Color(0xFF94A3B8)) },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("guest_voice_name_input")
-                    )
-                    if (bioState.enrolledProfiles.isNotEmpty()) {
-                        Text(
-                            text = "সেভ করা ভয়েস প্রিন্ট ও কথা বলার ধরন (${bioState.enrolledProfiles.size}):",
-                            color = Color(0xFF38BDF8),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        bioState.enrolledProfiles.forEach { prof ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "• ${prof.speakerName} (${prof.gender.labelBn} • ${prof.meanPitchHz.toInt()}Hz)",
-                                        color = if (prof.isOwnerBoss) MatrixGreen else Color.White,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "ধরন: ${prof.speakingStyleSummaryBn}" +
-                                            if (prof.signatureWords.isNotEmpty()) " | শব্দ: ${prof.signatureWords.take(4).joinToString(", ")}" else "",
-                                        color = Color(0xFF94A3B8),
-                                        fontSize = 9.5.sp
-                                    )
-                                }
-                                TextButton(
-                                    onClick = {
-                                        com.example.service.VoiceBiometricsEngine.deleteVoiceProfile(context, prof.id)
-                                    }
-                                ) {
-                                    Text("মুছুন", color = Color(0xFFF87171), fontSize = 10.sp)
-                                }
-                            }
-                        }
-                    }
-                    if (bioState.hasOwnerBossProfile) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "🔒 সংবেদনশীল আদেশে বসের ভয়েস সিকিউরিটি গেট",
-                                color = Color.White,
-                                fontSize = 11.sp
-                            )
-                            Switch(
-                                checked = bioState.isVoiceSecurityLockEnabled,
-                                onCheckedChange = { enabled ->
-                                    com.example.service.VoiceBiometricsEngine.setVoiceSecurityLockEnabled(context, enabled)
-                                }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val targetName = guestNameInput.trim().ifBlank { "মেহমান" }
-                        showGuestEnrollDialog = false
-                        guestNameInput = ""
-                        com.example.service.VoiceBiometricsEngine.startFiveSecondVoiceEnrollment(
-                            context = context,
-                            speakerName = targetName,
-                            isOwnerBoss = targetName.equals("বস", ignoreCase = true) || targetName.equals("Boss", ignoreCase = true),
-                            onComplete = { msg -> onSpeakStatus(msg) }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF38BDF8),
-                        contentColor = Color.Black
-                    ),
-                    modifier = Modifier.testTag("confirm_enroll_guest_voice_button")
-                ) {
-                    Text("🎙️ কণ্ঠ রেকর্ড ও সেভ করুন", fontWeight = FontWeight.ExtraBold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showGuestEnrollDialog = false }) {
                     Text("বন্ধ করুন", color = Color(0xFF94A3B8))
                 }
             }

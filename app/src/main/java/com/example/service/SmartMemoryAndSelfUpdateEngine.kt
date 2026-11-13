@@ -62,10 +62,10 @@ data class SmartEvolutionState(
     val learnedPlaybooks: List<LearnedWorkflowPlaybook> = emptyList(),
     val installedFeaturePatches: List<SelfInstalledFeaturePatch> = emptyList(),
     val learnedAppCount: Int = 0,
-    val filteredJunkCount: Int = 12,
+    val filteredJunkCount: Int = 0,
     val systemHealthScore: Int = 100,
-    val selfUpdateVersion: String = "ARCHER OS v4.8 • TURBO SELF-EVOLVING",
-    val lastSelfHealReportBn: String = "সিস্টেম ১০০% অপটিমাইজড • টার্বো স্ক্রিন ও অ্যাকশন ইঞ্জিন সচল"
+    val selfUpdateVersion: String = "ARCHER OS v4.8",
+    val lastSelfHealReportBn: String = "সিস্টেম সচল"
 ) {
     val isAutoMemoryFilterEnabled: Boolean get() = autoSmartMemoryFilterEnabled
     val isTurboUiSpeedEnabled: Boolean get() = turboUiSpeedEnabled
@@ -108,14 +108,12 @@ object SmartMemoryAndSelfUpdateEngine {
         versionCounter = prefs.getInt(KEY_VERSION_COUNTER, 8)
 
         val playbooks = loadPlaybooksFromPrefs(prefs.getString(KEY_PLAYBOOKS_JSON, null))
-            .ifEmpty { defaultCorePlaybooks() }
         val patches = loadPatchesFromPrefs(prefs.getString(KEY_PATCHES_JSON, null))
-            .ifEmpty { defaultSelfInstalledPatches() }
 
         val installedCount = try {
             InstalledAppsIndex.list(appCtx).size
         } catch (_: Exception) {
-            32
+            0
         }
 
         _state.value = SmartEvolutionState(
@@ -123,9 +121,10 @@ object SmartMemoryAndSelfUpdateEngine {
             turboUiSpeedEnabled = turboSpeed,
             learnedPlaybooks = playbooks,
             installedFeaturePatches = patches,
-            learnedAppCount = installedCount.coerceAtLeast(25),
+            learnedAppCount = installedCount,
+            filteredJunkCount = 0,
             systemHealthScore = 100,
-            selfUpdateVersion = "ARCHER OS v4.$versionCounter • TURBO SELF-EVOLVING"
+            selfUpdateVersion = "ARCHER OS v4.$versionCounter"
         )
         saveStateToPrefs(appCtx)
     }
@@ -854,74 +853,7 @@ object SmartMemoryAndSelfUpdateEngine {
         }
     }
 
-    private fun defaultCorePlaybooks(): List<LearnedWorkflowPlaybook> = listOf(
-        LearnedWorkflowPlaybook(
-            id = "wf_yt_search_play",
-            taskTitleBn = "YouTube • সরাসরি ভিডিও সার্চ ও অটো-প্লে",
-            triggerPhrase = "ইউটিউবে মটু পাতলু বের করো",
-            targetAppOrSite = "YouTube",
-            stepsList = listOf(
-                "ধাপ ১: সরাসরি নেটিভ YouTube অ্যাপে সার্চ কুয়েরি পাঠানো (গুগলে না গিয়ে)",
-                "ধাপ ২: ভয়েস মাইক এড়িয়ে শুধু আসল সার্চ রেজাল্ট লিস্ট চেক করা",
-                "ধাপ ৩: প্রথম মিলে যাওয়া ভিডিও টাইটেলে 180ms ফাস্ট ট্যাপ করে চালু করা"
-            ),
-            replayCommand = "ইউটিউবে মটু পাতলু বের করো",
-            speedMs = 180L,
-            timesUsed = 5
-        ),
-        LearnedWorkflowPlaybook(
-            id = "wf_recent_apps_clean",
-            taskTitleBn = "Recent Apps • রিসেন্ট অ্যাপ থেকে অ্যাপ সরানো",
-            triggerPhrase = "রিসেন্ট অ্যাপ থেকে অ্যাপ সরিয়ে দাও",
-            targetAppOrSite = "SystemUI Recents",
-            stepsList = listOf(
-                "ধাপ ১: GLOBAL_ACTION_RECENTS দিয়ে রিসেন্ট অ্যাপস ওভারভিউ ওপেন করা",
-                "ধাপ ২: টার্গেট অ্যাপ কার্ড শনাক্ত করে উপরের দিকে ফাস্ট সোয়াইপ-আপ করা",
-                "ধাপ ৩: ব্যাকগ্রাউন্ড প্রসেস ক্লিয়ার ও Clear All বাটন চেক করা"
-            ),
-            replayCommand = "রিসেন্ট অ্যাপ ক্লিয়ার করো",
-            speedMs = 190L,
-            timesUsed = 3
-        ),
-        LearnedWorkflowPlaybook(
-            id = "wf_all_sound_streams",
-            taskTitleBn = "Audio Engine • মিডিয়া, রিংটোন, অ্যালার্ম ও নোটিফিকেশন কন্ট্রোল",
-            triggerPhrase = "মিডিয়া, রিংটোন, নোটিফিকেশন ও এলার্ম সাউন্ড কন্ট্রোল",
-            targetAppOrSite = "Android AudioManager",
-            stepsList = listOf(
-                "ধাপ ১: ভয়েস কমান্ড থেকে স্ট্রিম (MUSIC / RING / NOTIFICATION / ALARM / CALL) আলাদা করা",
-                "ধাপ ২: AudioManager দিয়ে তাৎক্ষণিক পার্সেন্টেজ সেট ও UI স্লাইডার সিঙ্ক করা"
-            ),
-            replayCommand = "সব সাউন্ড ৮০% করো",
-            speedMs = 95L,
-            timesUsed = 6
-        )
-    )
+    private fun defaultCorePlaybooks(): List<LearnedWorkflowPlaybook> = emptyList()
 
-    private fun defaultSelfInstalledPatches(): List<SelfInstalledFeaturePatch> = listOf(
-        SelfInstalledFeaturePatch(
-            id = "patch_turbo_screen_action",
-            featureTitleBn = "টার্বো স্ক্রিন ও ইউআই ফাস্ট এক্সিকিউশন (180ms)",
-            triggerKeywords = "ফাস্ট কাজ করো / স্ক্রিন দেখে দ্রুত কাজ করো",
-            behaviorDirective = "স্ক্রিন দেখে কাজ করার সময় কোনো অযথা দেরি না করে 180ms-280ms ফাস্ট রেসপন্সে ট্যাপ, টাইপ ও স্ক্রল সম্পন্ন করবে।",
-            autoActionHint = "TURBO_UI_MODE",
-            versionLabel = "v4.8-Core"
-        ),
-        SelfInstalledFeaturePatch(
-            id = "patch_universal_app_site_comprehension",
-            featureTitleBn = "সব অ্যাপ ও ওয়েবসাইট স্বয়ংক্রিয়ভাবে বোঝার ক্ষমতা",
-            triggerKeywords = "এই অ্যাপটা কিভাবে কাজ করে / ওয়েবসাইট বুঝিয়ে বলো",
-            behaviorDirective = "যেকোনো অ্যাপ বা ওয়েবসাইট খুললে তার বাটন, সার্চ বক্স, মেনু ও কাজের নিয়ম নিজে থেকে বুঝে স্যারকে জানাবে এবং নির্দেশ পালন করবে।",
-            autoActionHint = "ANALYZE_APP_OR_SITE",
-            versionLabel = "v4.8-Core"
-        ),
-        SelfInstalledFeaturePatch(
-            id = "patch_recent_apps_remover",
-            featureTitleBn = "ভয়েস কমান্ডে রিসেন্ট অ্যাপ সরানো (Recent Apps Cleaner)",
-            triggerKeywords = "রিসেন্ট অ্যাপ থেকে সরাও / রিসেন্ট ক্লিয়ার করো",
-            behaviorDirective = "স্যার বললে রিসেন্ট অ্যাপ ওপেন করে নির্দিষ্ট অ্যাপ বা সব রিসেন্ট অ্যাপ সোয়াইপ করে সরিয়ে দেবে।",
-            autoActionHint = "CLEAR_RECENT_APPS",
-            versionLabel = "v4.8-Core"
-        )
-    )
+    private fun defaultSelfInstalledPatches(): List<SelfInstalledFeaturePatch> = emptyList()
 }

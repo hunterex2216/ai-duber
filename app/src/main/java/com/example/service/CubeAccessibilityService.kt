@@ -742,8 +742,7 @@ class CubeAccessibilityService : AccessibilityService() {
             val viewId = cur.viewIdResourceName?.substringAfter('/')?.trim().orEmpty()
             val clsShort = cur.className?.toString()?.substringAfterLast('.')?.trim().orEmpty().ifBlank { "View" }
 
-            val isClickableOrParent = cur.isClickable || cur.isLongClickable ||
-                (cur.parent?.isClickable == true && (text.isNotBlank() || desc.isNotBlank()))
+            val isClickableOrParent = isNodeOrAncestorClickable(cur, maxDepth = 4)
             val isEditable = cur.isEditable
             val isScrollable = cur.isScrollable
 
@@ -811,6 +810,30 @@ class CubeAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun isNodeOrAncestorClickable(node: AccessibilityNodeInfo, maxDepth: Int = 4): Boolean {
+        if (node.isClickable || node.isLongClickable) return true
+        var cur: AccessibilityNodeInfo? = node.parent
+        var depth = 0
+        while (cur != null && depth < maxDepth) {
+            if (cur.isClickable || cur.isLongClickable) return true
+            cur = cur.parent
+            depth++
+        }
+        return false
+    }
+
+    private fun findClickableSelfOrAncestor(node: AccessibilityNodeInfo, maxDepth: Int = 4): AccessibilityNodeInfo? {
+        if (node.isClickable) return node
+        var cur: AccessibilityNodeInfo? = node.parent
+        var depth = 0
+        while (cur != null && depth < maxDepth) {
+            if (cur.isClickable) return cur
+            cur = cur.parent
+            depth++
+        }
+        return if (node.isLongClickable) node else null
+    }
+
     /**
      * Captures a real screen bitmap for the autonomous vision brain (preferring active MediaProjection,
      * then Android 11+ Accessibility takeScreenshot). Returns null if no real bitmap is available.
@@ -861,7 +884,7 @@ class CubeAccessibilityService : AccessibilityService() {
 
     /**
      * Directly taps a UI element at (cx, cy), preferring AccessibilityNodeInfo ACTION_CLICK on the
-     * tightest matching node near those coordinates and falling back to a real touch gesture.
+     * tightest matching node (or its clickable row ancestor up to 4 levels) and falling back to a touch gesture.
      */
     fun performAgentTap(cx: Int, cy: Int, labelHint: String = ""): Boolean {
         val dm = resources.displayMetrics
@@ -874,8 +897,10 @@ class CubeAccessibilityService : AccessibilityService() {
 
         val root = try { rootInActiveWindow } catch (_: Exception) { null }
         if (root != null) {
-            val matchedNode = findTightestNodeNearPoint(root, tx, ty, requireClickable = true, requireEditable = false)
-            if (matchedNode != null && matchedNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            val matchedLeaf = findTightestNodeNearPoint(root, tx, ty, requireClickable = false, requireEditable = false)
+            val clickableAncestor = matchedLeaf?.let { findClickableSelfOrAncestor(it, maxDepth = 4) }
+                ?: findTightestNodeNearPoint(root, tx, ty, requireClickable = true, requireEditable = false)
+            if (clickableAncestor != null && clickableAncestor.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                 return true
             }
         }
@@ -888,7 +913,7 @@ class CubeAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Focuses/clicks the target editable field at (cx, cy), waits briefly for composer activation,
+     * Focuses/clicks the target editable field at (cx, cy), auto-expanding collapsible search bars if needed,
      * and inputs text via ACTION_SET_TEXT (with clipboard + ACTION_PASTE fallback).
      */
     suspend fun performAgentTypeText(
@@ -904,19 +929,35 @@ class CubeAccessibilityService : AccessibilityService() {
         val tx = cx.coerceIn(8, dm.widthPixels.coerceAtLeast(720) - 8)
         val ty = cy.coerceIn(16, dm.heightPixels.coerceAtLeast(1280) - 16)
 
-        val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return false
-        val targetEditable = findTightestNodeNearPoint(root, tx, ty, requireClickable = false, requireEditable = true)
+        var root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return false
+        var targetEditable = findTightestNodeNearPoint(root, tx, ty, requireClickable = false, requireEditable = true)
             ?: findBestEditableFallback(root, ty, labelHint)
-            ?: return false
 
-        TouchEffectOverlay.tap(tx.toFloat(), ty.toFloat())
-        targetEditable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        targetEditable.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        delay(150L)
+        // If no editable exists yet (e.g. tapping a collapsed Search icon or Search pill in WhatsApp/Messenger),
+        // tap the target coordinates first to expand the search EditText!
+        if (targetEditable == null) {
+            performAgentTap(tx, ty, labelHint)
+            delay(240L)
+            root = try { rootInActiveWindow } catch (_: Exception) { null } ?: root
+            targetEditable = findFocusedEditableNode(root)
+                ?: findTightestNodeNearPoint(root, tx, ty, requireClickable = false, requireEditable = true)
+                ?: findBestEditableFallback(root, ty, labelHint)
+                ?: return false
+        } else {
+            TouchEffectOverlay.tap(tx.toFloat(), ty.toFloat())
+            targetEditable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            targetEditable.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            delay(140L)
+        }
 
         // Re-fetch node from fresh root if possible after focusing
         val freshRoot = try { rootInActiveWindow } catch (_: Exception) { null } ?: root
-        val freshNode = findTightestNodeNearPoint(freshRoot, tx, ty, requireClickable = false, requireEditable = true)
+        val freshNode = findFocusedEditableNode(freshRoot)?.takeIf {
+            val r = Rect()
+            it.getBoundsInScreen(r)
+            kotlin.math.abs(r.centerY() - ty) < 360
+        } ?: findTightestNodeNearPoint(freshRoot, tx, ty, requireClickable = false, requireEditable = true)
+            ?: findBestEditableFallback(freshRoot, ty, labelHint)
             ?: targetEditable
 
         val args = Bundle().apply {
@@ -939,6 +980,21 @@ class CubeAccessibilityService : AccessibilityService() {
             AccessibilityAutomationBus.updateTouchTelemetry("এজেন্ট টাইপ: \"$cleanText\"")
         }
         return typed
+    }
+
+    private fun findFocusedEditableNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 300) {
+            val cur = queue.removeFirst()
+            visited++
+            if (cur.isEditable && cur.isFocused && cur.isVisibleToUser) return cur
+            for (i in 0 until cur.childCount) {
+                cur.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return null
     }
 
     fun performAgentScroll(direction: String): Boolean {
@@ -1609,22 +1665,26 @@ class CubeAccessibilityService : AccessibilityService() {
      */
     private fun executeScreenGuidedChatMessagingMacro(root: AccessibilityNodeInfo, macro: PendingUiMacro) {
         val rawRec = macro.contactRecipientToOpen.trim()
-        val cleanRecipient = if (AutonomousScreenAgent.isDeicticReference(rawRec)) "" else rawRec
+        val isSelfId = AutonomousScreenAgent.isSelfRecipientReference(rawRec)
+        val cleanRecipient = if (!isSelfId && AutonomousScreenAgent.isDeicticReference(rawRec)) "" else rawRec
         val cleanMessage = macro.textToType.trim()
         val chatInputNode = findBottomChatMessageInputNode(root, macro.targetViewIds)
 
         // Stage 1: Need to open the recipient's chat conversation first
         if (cleanRecipient.isNotBlank() && chatInputNode == null) {
-            // Try clicking the recipient's name directly on the current chat list or search results
-            if (findAndClickByTextAcrossWindows(cleanRecipient, exactOrButtonPreferred = false, excludeTopSearchHeader = true)) {
+            val matchCandidates = AutonomousScreenAgent.buildSmartSearchAndMatchCandidates(cleanRecipient, isSelf = isSelfId)
+            val clickedCandidate = matchCandidates.firstOrNull { cand ->
+                findAndClickByTextAcrossWindows(cand, exactOrButtonPreferred = false, excludeTopSearchHeader = true)
+            }
+            if (clickedCandidate != null) {
                 val openedContactMacro = macro.copy(contactRecipientToOpen = "")
                 if (cleanMessage.isBlank()) {
-                    AccessibilityAutomationBus.recordMacroSuccess("'$cleanRecipient'-এর চ্যাট স্ক্রিন ওপেন করা হয়েছে")
+                    AccessibilityAutomationBus.recordMacroSuccess("'$clickedCandidate'-এর চ্যাট স্ক্রিন ওপেন করা হয়েছে")
                     return
                 }
                 AccessibilityAutomationBus.updatePendingMacro(
                     macro = openedContactMacro,
-                    statusMessage = "'$cleanRecipient'-এর চ্যাট ওপেন হয়েছে, এখন মেসেজ বক্স দেখে মেসেজ টাইপ করা হচ্ছে..."
+                    statusMessage = "'$clickedCandidate'-এর চ্যাট ওপেন হয়েছে, এখন মেসেজ বক্স দেখে মেসেজ টাইপ করা হচ্ছে..."
                 )
                 handler.postDelayed({ tryExecutePendingMacro() }, 380L)
                 return
@@ -1632,12 +1692,15 @@ class CubeAccessibilityService : AccessibilityService() {
 
             // If recipient not directly visible on list, use the top search bar to find the contact
             if (!macro.contactSearchTyped) {
+                val queryToType = matchCandidates.firstOrNull {
+                    !it.equals(cleanRecipient, ignoreCase = true) || isSelfId
+                } ?: matchCandidates.firstOrNull() ?: cleanRecipient
                 val topSearchNode = findTopSearchEditableNode(root)
                 if (topSearchNode != null) {
                     val args = Bundle().apply {
                         putCharSequence(
                             AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                            cleanRecipient
+                            queryToType
                         )
                     }
                     topSearchNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -1646,7 +1709,7 @@ class CubeAccessibilityService : AccessibilityService() {
                         submitImeEnterIfSearchField(topSearchNode)
                         AccessibilityAutomationBus.updatePendingMacro(
                             macro = macro.copy(contactSearchTyped = true),
-                            statusMessage = "সার্চ বারে '$cleanRecipient' লিখে খোঁজা হচ্ছে..."
+                            statusMessage = "সার্চ বারে '$queryToType' লিখে খোঁজা হচ্ছে..."
                         )
                         handler.postDelayed({ tryExecutePendingMacro() }, 480L)
                         return
@@ -1654,14 +1717,17 @@ class CubeAccessibilityService : AccessibilityService() {
                 } else {
                     val clickedSearchIcon = findAndClickByViewIdAcrossWindows("com.whatsapp:id/menuitem_search") ||
                         findAndClickByViewIdAcrossWindows("com.whatsapp.w4b:id/menuitem_search") ||
+                        findAndClickByViewIdAcrossWindows("com.whatsapp:id/search_bar") ||
+                        findAndClickByViewIdAcrossWindows("com.whatsapp:id/search_src_text") ||
                         findAndClickByViewIdAcrossWindows("org.telegram.messenger:id/menu_search") ||
+                        findAndClickByTextAcrossWindows("Ask Meta AI or Search", exactOrButtonPreferred = false) ||
                         findAndClickByTextAcrossWindows("Search", exactOrButtonPreferred = true) ||
                         findAndClickByTextAcrossWindows("খুঁজুন", exactOrButtonPreferred = true) ||
                         findAndClickByTextAcrossWindows("সার্চ", exactOrButtonPreferred = true)
                     if (clickedSearchIcon) {
                         AccessibilityAutomationBus.updatePendingMacro(
                             macro = macro,
-                            statusMessage = "সার্চ বক্স ওপেন করা হয়েছে, '$cleanRecipient' টাইপ করা হচ্ছে..."
+                            statusMessage = "সার্চ বক্স ওপেন করা হয়েছে, '$queryToType' টাইপ করা হচ্ছে..."
                         )
                         handler.postDelayed({ tryExecutePendingMacro() }, 360L)
                         return

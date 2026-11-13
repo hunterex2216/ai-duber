@@ -8,6 +8,7 @@ import android.net.Uri
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -53,6 +54,16 @@ data class AutonomousAgentResult(
  */
 object AutonomousScreenAgent {
 
+    data class ResolvedRecipientProfile(
+        val rawInput: String,
+        val isSelfId: Boolean,
+        val isDeictic: Boolean,
+        val primaryDisplayName: String,
+        val resolvedPhoneNumber: String = "",
+        val searchQueries: List<String> = emptyList(),
+        val rowMatchKeywords: List<String> = emptyList()
+    )
+
     private val FAST_VISION_MODELS = listOf(
         "models/gemini-2.5-flash",
         "models/gemini-2.5-pro",
@@ -67,15 +78,337 @@ object AutonomousScreenAgent {
         "current chat", "current user", "here", "same person"
     )
 
+    private val SELF_ID_TERMS = setOf(
+        "আমার আইডি", "আমার আইডিতে", "আমার নিজের আইডি", "আমার নিজের আইডিতে",
+        "নিজের আইডি", "নিজের আইডিতে", "নিজেকে", "আমাকে", "আমার নাম্বার", "আমার নাম্বারে",
+        "আমার নম্বর", "আমার নম্বরে", "আমার হোয়াটসঅ্যাপ", "আমার হোয়াটসঅ্যাপ",
+        "আমার অন্য আইডি", "আমার অন্য আইডিতে", "আমার সেকেন্ড আইডি", "আমার দ্বিতীয় আইডি",
+        "my id", "my own id", "myself", "message yourself", "to me", "my number",
+        "my whatsapp", "my account", "self", "note to self"
+    )
+
+    private val NON_CONTACT_ROW_LABELS = setOf(
+        "all", "unread", "favourites", "favorites", "groups", "communities", "chats",
+        "updates", "calls", "status", "channels", "archived", "locked chats",
+        "meta ai", "ask meta ai or search", "search", "search…", "search...",
+        "সার্চ", "খুঁজুন", "সব", "অপঠিত", "গ্রুপ", "কমিউনিটি", "চ্যাট", "কল", "আপডেট",
+        "new chat", "new group", "new community", "broadcast lists", "starred messages"
+    )
+
+    fun isSelfRecipientReference(raw: String, fullGoal: String = ""): Boolean {
+        val clean = raw.trim().lowercase()
+            .replace(Regex("^(to|for|@)\\s+"), "")
+            .replace(Regex("(কে|তে|র|য়|য়ে|য়ে)$"), "")
+            .trim()
+        val rawLow = raw.trim().lowercase()
+        val goalLow = fullGoal.trim().lowercase()
+        if (rawLow in SELF_ID_TERMS || clean in SELF_ID_TERMS) return true
+        if (SELF_ID_TERMS.any { term -> rawLow.contains(term) || (rawLow.isBlank() && goalLow.contains(term)) }) {
+            return true
+        }
+        return Regex("(?i)\\b(আমার\\s*(?:নিজের\\s*|অন্য\\s*)?(?:আইডি|নাম্বার|নম্বর|হোয়াটসঅ্যাপ|হোয়াটসঅ্যাপ)|নিজের\\s*আইডি|আমাকে\\s*মেসেজ|নিজেকে\\s*মেসেজ|message\\s+myself|my\\s+own\\s+id)\\b")
+            .containsMatchIn("$rawLow $goalLow")
+    }
+
     fun isDeicticReference(raw: String): Boolean {
         val clean = raw.trim().lowercase()
             .replace(Regex("^(to|for|@)\\s+"), "")
             .trim()
         if (clean.isBlank()) return false
+        if (isSelfRecipientReference(clean)) return false
         if (clean in DEICTIC_TERMS) return true
         return DEICTIC_TERMS.any { term ->
             clean == "${term}কে" || clean == "${term}র" || clean == "${term}তে"
         }
+    }
+
+    /**
+     * Builds multi-script (Bangla + English phonetic transliteration + Self-ID) search queries
+     * and row-matching keywords so the agent can find contacts whether saved in English or Bangla,
+     * and can locate the user's own account ("(You)", "Message yourself", Boss's name/phone).
+     */
+    fun buildSmartSearchAndMatchCandidates(rawName: String, isSelf: Boolean = false): List<String> {
+        val out = LinkedHashSet<String>()
+        if (isSelf || isSelfRecipientReference(rawName)) {
+            out.add("(You)")
+            out.add("You")
+            out.add("Message yourself")
+            out.add("নিজেকে")
+        }
+        val cleaned = rawName.trim()
+            .replace(Regex("(?i)^(to|for|@)\\s+"), "")
+            .replace(Regex("(?:কে|রে|ের|তে|য়ে|য়ে)\\s*$"), "")
+            .replace(Regex("(?i)\\s*(?:এর\\s*আইডি|আইডি|ভাইয়া|ভাইয়া|ভাই|আপু|স্যার|বস)\\s*$"), "")
+            .trim()
+        if (cleaned.isNotBlank() && !isSelfRecipientReference(cleaned)) {
+            out.add(cleaned)
+            val enPhonetic = transliterateBengaliToEnglish(cleaned)
+            if (enPhonetic.length >= 2 && !enPhonetic.equals(cleaned, ignoreCase = true)) {
+                out.add(enPhonetic)
+                val altPhonetic = enPhonetic
+                    .replace("ee", "i")
+                    .replace("oo", "u")
+                    .replace("sh", "s")
+                    .replace("v", "bh")
+                if (altPhonetic.length >= 2) out.add(altPhonetic)
+            }
+            val firstWord = cleaned.split(Regex("\\s+")).firstOrNull()?.trim().orEmpty()
+            if (firstWord.length >= 2) {
+                out.add(firstWord)
+                val firstEn = transliterateBengaliToEnglish(firstWord)
+                if (firstEn.length >= 2) out.add(firstEn)
+            }
+        }
+        return out.filter { it.isNotBlank() }
+    }
+
+    fun transliterateBengaliToEnglish(input: String): String {
+        val hasBengali = input.any { it in '\u0980'..'\u09FF' }
+        if (!hasBengali) return input.trim()
+
+        val exactDictionary = mapOf(
+            "রাহিম" to "Rahim", "রহিম" to "Rahim", "করিম" to "Karim", "রিয়ান" to "Riyan", "রিয়ান" to "Riyan",
+            "হাসান" to "Hasan", "হোসাইন" to "Hossain", "হোসেন" to "Hosen", "সাকিব" to "Sakib", "শাকিব" to "Shakib",
+            "তামিম" to "Tamim", "নাইম" to "Naim", "নাঈম" to "Nayeem", "ফাহিম" to "Fahim", "মাহিম" to "Mahim",
+            "তানভীর" to "Tanvir", "সাব্বির" to "Sabbir", "আরিফ" to "Arif", "শরীফ" to "Sharif", "শরিফ" to "Sharif",
+            "তারেক" to "Tarek", "তারিক" to "Tarik", "জাহিদ" to "Jahid", "নাহিদ" to "Nahid", "শহীদ" to "Shahid",
+            "শাহিন" to "Shahin", "তুহিন" to "Tuhin", "সুমন" to "Sumon", "সুজন" to "Sujon", "রিপন" to "Ripon",
+            "লিটন" to "Liton", "মিলন" to "Milon", "নয়ন" to "Noyon", "নয়ন" to "Noyon", "হৃদয়" to "Hridoy",
+            "হৃদয়" to "Hridoy", "সাগর" to "Sagor", "আকাশ" to "Akash", "বাতাস" to "Batas", "শান্ত" to "Shanto",
+            "প্রান্ত" to "Pranto", "জয়" to "Joy", "জয়" to "Joy", "বিজয়" to "Bijoy", "বিজয়" to "Bijoy",
+            "রাকিব" to "Rakib", "রাজিব" to "Rajib", "সজীব" to "Sajib", "সজিব" to "Sajib", "আসিফ" to "Asif",
+            "তৌহিদ" to "Towhid", "মেহেদী" to "Mehedi", "মেহেদি" to "Mehedi", "মাহমুদ" to "Mahmud", "আহমেদ" to "Ahmed",
+            "মোহাম্মদ" to "Mohammad", "মুহাম্মদ" to "Muhammad", "মোঃ" to "Md", "মিমি" to "Mimi", "তানিয়া" to "Tania",
+            "তানিয়া" to "Tania", "সাদিয়া" to "Sadia", "সাদিয়া" to "Sadia", "নুসরাত" to "Nusrat", "জান্নাত" to "Jannat",
+            "সুমাইয়া" to "Sumaiya", "সুমাইয়া" to "Sumaiya", "ফারজানা" to "Farzana", "শারমিন" to "Sharmin",
+            "আম্মু" to "Ammu", "আব্বু" to "Abbu", "মা" to "Maa", "বাবা" to "Baba", "ভাইয়া" to "Bhaiya", "ভাই" to "Bhai"
+        )
+
+        val words = input.trim().split(Regex("\\s+"))
+        val mappedWords = words.map { w ->
+            exactDictionary[w]?.let { return@map it }
+            val sb = StringBuilder()
+            var i = 0
+            while (i < w.length) {
+                val c = w[i]
+                val next = w.getOrNull(i + 1)
+                val piece = when (c) {
+                    'অ' -> "a"; 'আ' -> "a"; 'ই' -> "i"; 'ঈ' -> "ee"; 'উ' -> "u"; 'ঊ' -> "u"
+                    'ঋ' -> "ri"; 'এ' -> "e"; 'ঐ' -> "oi"; 'ও' -> "o"; 'ঔ' -> "ou"
+                    'া' -> "a"; 'ি' -> "i"; 'ী' -> "i"; 'ু' -> "u"; 'ূ' -> "u"; 'ৃ' -> "ri"
+                    'ে' -> "e"; 'ৈ' -> "oi"; 'ো' -> "o"; 'ৌ' -> "ou"; '্', '\u09BC' -> ""
+                    'ক' -> "k"; 'খ' -> "kh"; 'গ' -> "g"; 'ঘ' -> "gh"; 'ঙ' -> "ng"
+                    'চ' -> "ch"; 'ছ' -> "chh"; 'জ' -> "j"; 'ঝ' -> "jh"; 'ঞ' -> "n"
+                    'ট' -> "t"; 'ঠ' -> "th"; 'ড' -> "d"; 'ঢ' -> "dh"; 'ণ' -> "n"
+                    'ত' -> "t"; 'থ' -> "th"; 'দ' -> "d"; 'ধ' -> "dh"; 'ন' -> "n"
+                    'প' -> "p"; 'ফ' -> "f"; 'ব' -> "b"; 'ভ' -> "bh"; 'ম' -> "m"
+                    'য' -> if (next == '\u09BC') "y" else "j"
+                    'র' -> "r"; 'ল' -> "l"; 'শ' -> "sh"; 'ষ' -> "sh"; 'স' -> "s"; 'হ' -> "h"
+                    '\u09DC', '\u09DD' -> "r"; '\u09DF' -> "y"; 'ৎ' -> "t"; 'ং' -> "ng"; 'ঃ' -> "h"; 'ঁ' -> ""
+                    else -> c.toString()
+                }
+                sb.append(piece)
+                val isConsonant = c in 'ক'..'হ' || c == '\u09DC' || c == '\u09DD' || c == '\u09DF'
+                val nextIsVowelSignOrHasanta = next != null && (next in 'া'..'ৌ' || next == '্' || next == '\u09BC')
+                if (isConsonant && !nextIsVowelSignOrHasanta && next != null) {
+                    sb.append('a')
+                }
+                i++
+            }
+            sb.toString().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        }
+        return mappedWords.joinToString(" ").trim()
+    }
+
+    private suspend fun resolveSmartRecipientProfile(
+        context: Context,
+        rawRecipient: String,
+        goal: String,
+        appHint: String
+    ): ResolvedRecipientProfile = withContext(Dispatchers.IO) {
+        val trimmed = rawRecipient.trim()
+        val isSelf = isSelfRecipientReference(trimmed, goal)
+        val isDeictic = !isSelf && (isDeicticReference(trimmed) || (trimmed.isBlank() && isDeicticReferenceInGoal(goal)))
+        if (isDeictic) {
+            return@withContext ResolvedRecipientProfile(
+                rawInput = trimmed,
+                isSelfId = false,
+                isDeictic = true,
+                primaryDisplayName = ""
+            )
+        }
+
+        val searchQueries = LinkedHashSet<String>()
+        val rowMatchKeywords = LinkedHashSet<String>()
+        var phone = ""
+        var displayName = trimmed
+
+        val db = try { com.example.data.AgentDatabase.getInstance(context) } catch (_: Exception) { null }
+
+        if (isSelf) {
+            val driveState = GoogleDriveMemorySyncService.state.value
+            val bossName = driveState.displayName.trim()
+            val bossEmailPrefix = driveState.linkedEmail.substringBefore("@").trim()
+
+            // Check saved platform accounts & memory notes for Boss's own number/ID
+            val savedAccounts = try {
+                db?.platformAccountDao()?.getAllAccounts()?.first().orEmpty()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val savedNotes = try {
+                db?.agentMemoryNoteDao()?.getRecentNotesSnapshot(30).orEmpty()
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+            for (acc in savedAccounts) {
+                val h = acc.handleOrNumberOrUrl.trim()
+                val cName = acc.contactOrGroupName.trim()
+                val digits = h.filter { it.isDigit() || it == '+' }
+                if (digits.length >= 10 && phone.isBlank()) phone = digits
+                if (cName.length >= 2) {
+                    searchQueries.add(cName)
+                    rowMatchKeywords.add(cName)
+                }
+                if (h.length >= 2) {
+                    searchQueries.add(h)
+                    rowMatchKeywords.add(h)
+                }
+            }
+            for (note in savedNotes) {
+                val combined = "${note.title} ${note.content}"
+                if (combined.contains("আমার", ignoreCase = true) || combined.contains("নিজের", ignoreCase = true) ||
+                    combined.contains("boss", ignoreCase = true) || combined.contains("my number", ignoreCase = true) ||
+                    combined.contains("my id", ignoreCase = true)
+                ) {
+                    val m = Regex("(?:\\+?88)?01[3-9]\\d{8}").find(combined)
+                    if (m != null && phone.isBlank()) phone = m.value
+                }
+            }
+
+            if (bossName.length >= 2) {
+                displayName = bossName
+                searchQueries.add(bossName)
+                rowMatchKeywords.add(bossName)
+                val firstBoss = bossName.split(" ").firstOrNull()?.trim().orEmpty()
+                if (firstBoss.length >= 2) {
+                    searchQueries.add(firstBoss)
+                    rowMatchKeywords.add(firstBoss)
+                }
+            } else {
+                displayName = "আমার আইডি (You)"
+            }
+            if (bossEmailPrefix.length >= 3) {
+                val cleanPrefix = bossEmailPrefix.replace(Regex("\\d+$"), "").trim()
+                if (cleanPrefix.length >= 3) {
+                    searchQueries.add(cleanPrefix)
+                    rowMatchKeywords.add(cleanPrefix)
+                }
+            }
+
+            // WhatsApp & chat apps universal Self-Chat markers
+            searchQueries.add("(You)")
+            searchQueries.add("Message yourself")
+            searchQueries.add("You")
+            rowMatchKeywords.add("(you)")
+            rowMatchKeywords.add("message yourself")
+            rowMatchKeywords.add("নিজেকে মেসেজ")
+            rowMatchKeywords.add("নিজেকে")
+            if (phone.isNotBlank()) {
+                searchQueries.add(phone)
+                rowMatchKeywords.add(phone.takeLast(8))
+            }
+
+            return@withContext ResolvedRecipientProfile(
+                rawInput = trimmed.ifBlank { "আমার আইডি" },
+                isSelfId = true,
+                isDeictic = false,
+                primaryDisplayName = displayName,
+                resolvedPhoneNumber = phone,
+                searchQueries = searchQueries.toList(),
+                rowMatchKeywords = rowMatchKeywords.toList()
+            )
+        }
+
+        // Named contact or phone number resolution
+        val baseCandidates = buildSmartSearchAndMatchCandidates(trimmed, isSelf = false)
+        baseCandidates.forEach {
+            searchQueries.add(it)
+            rowMatchKeywords.add(it)
+        }
+
+        val directDigits = trimmed.filter { it.isDigit() || it == '+' }
+        if (directDigits.length >= 8) {
+            phone = directDigits
+        }
+
+        // Look up Android ContactsContract using both Bangla & English phonetic candidates
+        try {
+            val cr = context.contentResolver
+            cr.query(
+                android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+                ),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                val numIdx = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                while (cursor.moveToNext()) {
+                    val cName = if (nameIdx >= 0) cursor.getString(nameIdx)?.trim().orEmpty() else ""
+                    val cNum = if (numIdx >= 0) cursor.getString(numIdx)?.replace(Regex("[\\s\\-()]"), "").orEmpty() else ""
+                    if (cName.isBlank()) continue
+                    val matched = baseCandidates.any { cand ->
+                        cand.length >= 2 && (cName.contains(cand, ignoreCase = true) || cand.contains(cName, ignoreCase = true))
+                    }
+                    if (matched) {
+                        // Put exact saved contact name FIRST so WhatsApp search finds it on the very first try!
+                        val ordered = LinkedHashSet<String>()
+                        ordered.add(cName)
+                        ordered.addAll(searchQueries)
+                        searchQueries.clear()
+                        searchQueries.addAll(ordered)
+                        rowMatchKeywords.add(cName)
+                        if (cNum.length >= 8 && phone.isBlank()) {
+                            phone = cNum
+                            rowMatchKeywords.add(cNum.takeLast(8))
+                        }
+                        displayName = cName
+                        break
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Also check saved memory notes for custom nicknames / IDs (e.g. "আমার দ্বিতীয় আইডি রাহুল")
+        try {
+            val notes = db?.agentMemoryNoteDao()?.getRecentNotesSnapshot(30).orEmpty()
+            for (note in notes) {
+                val text = "${note.title} ${note.content}"
+                if (baseCandidates.any { it.length >= 2 && text.contains(it, ignoreCase = true) }) {
+                    val m = Regex("(?:\\+?88)?01[3-9]\\d{8}").find(text)
+                    if (m != null && phone.isBlank()) {
+                        phone = m.value
+                        searchQueries.add(phone)
+                        rowMatchKeywords.add(phone.takeLast(8))
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        ResolvedRecipientProfile(
+            rawInput = trimmed,
+            isSelfId = false,
+            isDeictic = false,
+            primaryDisplayName = displayName.ifBlank { trimmed },
+            resolvedPhoneNumber = phone,
+            searchQueries = searchQueries.toList(),
+            rowMatchKeywords = rowMatchKeywords.toList()
+        )
     }
 
     fun appPackageMatchesHint(currentPkg: String, appHint: String): Boolean {
@@ -143,33 +476,69 @@ object AutonomousScreenAgent {
 
         val cleanGoal = goal.trim()
         val rawRec = recipientHint.trim()
-        val isDeictic = isDeicticReference(rawRec) || (rawRec.isBlank() && isDeicticReferenceInGoal(cleanGoal))
-        val effectiveRecipient = if (isDeictic) "" else rawRec
-        var cleanMsg = messageHint.trim()
+        val profile = resolveSmartRecipientProfile(context, rawRec, cleanGoal, appHint)
+        val isDeictic = profile.isDeictic
+        val effectiveRecipient = if (isDeictic) "" else profile.primaryDisplayName.ifBlank { rawRec }
+        val cleanMsg = messageHint.trim()
 
         // Step 0: Inspect current screen FIRST before deciding whether to switch apps!
         val initialObs = withContext(Dispatchers.Main) { svc.captureRichScreenObservation() }
         val currentPkg = initialObs?.packageName.orEmpty()
         val ownPkg = context.packageName
+        val targetAppToOpen = appHint.ifBlank { inferAppFromGoal(cleanGoal) }
+        val isWhatsAppTarget = targetAppToOpen.lowercase().let {
+            it.contains("whatsapp") || it.contains("হোয়াটসঅ্যাপ") || it.contains("হোয়াটসঅ্যাপ")
+        } || currentPkg.contains("whatsapp", ignoreCase = true)
 
-        val shouldLaunchTargetApp = when {
+        // ULTRA-FAST DIRECT WHATSAPP DEEP-LINK JUMP:
+        // If we already resolved the phone number (from Contacts or Self-ID memory) and we are not already in that open chat,
+        // jump straight into the exact WhatsApp chat thread in 0 steps!
+        val alreadyInMatchingOpenChat = initialObs != null &&
+            findComposerNode(initialObs) != null &&
+            (isDeictic || headerMatchesProfile(initialObs, profile))
+
+        var launchedDirectDeepLink = false
+        if (isWhatsAppTarget && !alreadyInMatchingOpenChat && profile.resolvedPhoneNumber.length >= 8) {
+            val formattedPhone = normalizePhoneForWhatsApp(profile.resolvedPhoneNumber)
+            if (formattedPhone.length >= 10) {
+                onProgress("${profile.primaryDisplayName}-এর হোয়াটসঅ্যাপ চ্যাটে সরাসরি ঢুকছি...")
+                launchedDirectDeepLink = withContext(Dispatchers.Main) {
+                    try {
+                        val uriStr = buildString {
+                            append("whatsapp://send?phone=$formattedPhone")
+                            if (cleanMsg.isNotBlank()) append("&text=${Uri.encode(cleanMsg)}")
+                        }
+                        val deepIntent = Intent(Intent.ACTION_VIEW, Uri.parse(uriStr)).apply {
+                            setPackage(if (currentPkg == "com.whatsapp.w4b") "com.whatsapp.w4b" else "com.whatsapp")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(deepIntent)
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+                if (launchedDirectDeepLink) {
+                    delay(620L)
+                }
+            }
+        }
+
+        val shouldLaunchTargetApp = !launchedDirectDeepLink && when {
             appHint.isBlank() || appHint.equals("CURRENT_SCREEN", ignoreCase = true) -> {
-                currentPkg == ownPkg && inferAppFromGoal(cleanGoal).isNotBlank()
+                currentPkg == ownPkg && targetAppToOpen.isNotBlank()
             }
             appPackageMatchesHint(currentPkg, appHint) -> false // Already in target app! Keep current chat/scroll intact!
             else -> true
         }
 
-        if (shouldLaunchTargetApp) {
-            val targetAppToOpen = appHint.ifBlank { inferAppFromGoal(cleanGoal) }
-            if (targetAppToOpen.isNotBlank()) {
-                onProgress("$targetAppToOpen খুলছি...")
-                val launched = withContext(Dispatchers.Main) {
-                    launchAppForAgent(context, targetAppToOpen)
-                }
-                if (launched) {
-                    delay(550L)
-                }
+        if (shouldLaunchTargetApp && targetAppToOpen.isNotBlank()) {
+            onProgress("$targetAppToOpen খুলছি...")
+            val launched = withContext(Dispatchers.Main) {
+                launchAppForAgent(context, targetAppToOpen)
+            }
+            if (launched) {
+                delay(550L)
             }
         }
 
@@ -187,7 +556,10 @@ object AutonomousScreenAgent {
         var sameStateRepeatCount = 0
         var lastDecisionKey = ""
         val inspectedUnknownPkgs = HashSet<String>()
-        var triedFastVisibleContactTap = false
+        val tappedRowCoordinates = HashSet<String>()
+        val triedSearchQueries = LinkedHashSet<String>()
+        var triedNewChatFab = false
+        var wrongChatBackCount = 0
 
         for (stepIdx in 1..maxSteps) {
             val obs = withContext(Dispatchers.Main) { svc.captureRichScreenObservation() }
@@ -219,6 +591,7 @@ object AutonomousScreenAgent {
                     svc = svc,
                     obs = obs,
                     cleanMsg = cleanMsg,
+                    profile = profile,
                     effectiveRecipient = effectiveRecipient,
                     isDeictic = isDeictic,
                     stopBeforeFinalSend = stopBeforeFinalSend,
@@ -227,23 +600,108 @@ object AutonomousScreenAgent {
                 if (fastOpenRes != null) return fastOpenRes
             }
 
-            // ZERO-LLM FAST PATH #2: Contact row is unambiguously visible right on screen in [BODY]!
-            if (!triedFastVisibleContactTap &&
+            val composerNow = findComposerNode(obs)
+            val topSearchInput = findTopSearchEditableNode(obs)
+
+            // AUTONOMOUS WRONG-CHAT EXIT:
+            // If we are inside an open chat thread (`composerNow != null`), and the user asked for a specific
+            // person or their own ID (`!isDeictic`), and the open chat header does NOT match, immediately navigate BACK to chat list!
+            if (composerNow != null &&
                 !isDeictic &&
-                effectiveRecipient.isNotBlank() &&
-                findComposerNode(obs) == null
+                (profile.isSelfId || effectiveRecipient.isNotBlank()) &&
+                !headerMatchesProfile(obs, profile) &&
+                wrongChatBackCount < 2
             ) {
-                val matchingRow = findSingleMatchingContactRowInBody(obs, effectiveRecipient)
-                if (matchingRow != null) {
-                    triedFastVisibleContactTap = true
-                    onProgress("${matchingRow.bestLabel.ifBlank { effectiveRecipient }} দেখা যাচ্ছে, চ্যাটে ঢুকছি...")
+                wrongChatBackCount++
+                onProgress("অন্য চ্যাট খোলা আছে, ব্যাকে গিয়ে '${profile.primaryDisplayName}' খুঁজছি...")
+                val backBtn = findTopBackButton(obs)
+                val backed = withContext(Dispatchers.Main) {
+                    if (backBtn != null) {
+                        svc.performAgentTap(backBtn.cx, backBtn.cy, backBtn.bestLabel.ifBlank { "Back" })
+                    } else {
+                        svc.performAgentGlobalAction("BACK")
+                    }
+                }
+                stepsTaken.add("FastPath: Exited non-matching open chat '${headerContactName(obs)}' -> $backed")
+                delay(320L)
+                continue
+            }
+
+            // ZERO-LLM FAST PATH #2: Target contact / Self-ID row is visible on screen in [BODY] (chat list or search results)!
+            if (!isDeictic &&
+                (profile.isSelfId || effectiveRecipient.isNotBlank()) &&
+                composerNow == null
+            ) {
+                val matchingRow = findBestMatchingContactRowInBody(obs, profile, topSearchInput?.bounds?.bottom ?: 0)
+                val rowKey = matchingRow?.let { "${it.cx / 24},${it.cy / 24}:${it.bestLabel}" }.orEmpty()
+                if (matchingRow != null && tappedRowCoordinates.add(rowKey)) {
+                    onProgress("'${matchingRow.bestLabel.ifBlank { profile.primaryDisplayName }}' পাওয়া গেছে, চ্যাটে ঢুকছি...")
                     val tapped = withContext(Dispatchers.Main) {
                         svc.performAgentTap(matchingRow.cx, matchingRow.cy, matchingRow.bestLabel)
                     }
                     if (tapped) {
-                        stepsTaken.add("FastPath: Tapped visible contact '${matchingRow.bestLabel}' @(${matchingRow.cx},${matchingRow.cy})")
-                        delay(320L)
+                        stepsTaken.add("FastPath: Tapped contact row '${matchingRow.bestLabel}' @(${matchingRow.cx},${matchingRow.cy})")
+                        delay(360L)
                         continue
+                    }
+                }
+            }
+
+            // ZERO-LLM FAST PATH #3: AUTONOMOUS TOP SEARCH BAR & NEW-CHAT DECISION ENGINE
+            // When in a chat app (WhatsApp/Messenger/Telegram) without composer open and target isn't visible on screen yet,
+            // do NOT waste 4 seconds on an LLM call just to decide to use the top Search bar!
+            // Immediately go to the top Search bar (or New Chat FAB -> top row for Self-ID) and search!
+            if (!isDeictic &&
+                (profile.isSelfId || effectiveRecipient.isNotBlank()) &&
+                composerNow == null &&
+                isMessagingAppPackage(obs.packageName)
+            ) {
+                val nextQueryToTry = profile.searchQueries.firstOrNull { it !in triedSearchQueries }
+                val searchTrigger = topSearchInput ?: findTopSearchTriggerNode(obs)
+
+                if (nextQueryToTry != null && searchTrigger != null) {
+                    triedSearchQueries.add(nextQueryToTry)
+                    onProgress("উপরে সার্চ বারে গিয়ে '$nextQueryToTry' লিখে আইডিটা খুঁজছি...")
+                    AppKnowledgeRegistry.recordLearnedRole(
+                        context,
+                        obs.packageName,
+                        "SEARCH",
+                        searchTrigger.viewId,
+                        searchTrigger.bestLabel,
+                        searchTrigger.cx,
+                        searchTrigger.cy
+                    )
+                    val searchedOk = withContext(Dispatchers.Main) {
+                        svc.performAgentTypeText(
+                            cx = searchTrigger.cx,
+                            cy = searchTrigger.cy,
+                            text = nextQueryToTry,
+                            labelHint = searchTrigger.bestLabel.ifBlank { "Search" },
+                            submitIme = true
+                        )
+                    }
+                    stepsTaken.add("FastPath: Top Search Bar query='$nextQueryToTry' @(${searchTrigger.cx},${searchTrigger.cy}) -> $searchedOk")
+                    delay(480L)
+                    continue
+                }
+
+                // If in WhatsApp/chat app and either search trigger wasn't found or Self-ID "(You)" is in the New Chat contact list:
+                // Tapping "New chat" FAB in WhatsApp ALWAYS shows "(You) Message yourself" as the very first contact row!
+                if (!triedNewChatFab) {
+                    val newChatFab = findNewChatFabNode(obs)
+                    if (newChatFab != null) {
+                        triedNewChatFab = true
+                        onProgress("New Chat কন্টাক্ট লিস্ট খুলে আইডিটা বের করছি...")
+                        val tappedFab = withContext(Dispatchers.Main) {
+                            svc.performAgentTap(newChatFab.cx, newChatFab.cy, newChatFab.bestLabel.ifBlank { "New chat" })
+                        }
+                        if (tappedFab) {
+                            // Reset one primary query so inside the New Chat screen it can also search if needed
+                            profile.searchQueries.firstOrNull()?.let { triedSearchQueries.remove(it) }
+                            stepsTaken.add("FastPath: Opened New Chat FAB @(${newChatFab.cx},${newChatFab.cy})")
+                            delay(460L)
+                            continue
+                        }
                     }
                 }
             }
@@ -255,7 +713,7 @@ object AutonomousScreenAgent {
             val stuckWarning = if (!screenChanged && stepIdx > 1) {
                 sameStateRepeatCount++
                 "WARNING: Screen did NOT change after '$lastDecisionKey'! " +
-                    "Switch strategy immediately: tap Search icon + type name, SCROLL_DOWN to find hidden contacts/buttons, tap an exact row in [BODY], or press BACK."
+                    "Switch strategy immediately: tap top Search bar + type alternate query (${profile.searchQueries.joinToString("/")}), tap exact contact row in [BODY], tap New Chat button, SCROLL_DOWN, or press BACK."
             } else {
                 sameStateRepeatCount = 0
                 ""
@@ -275,6 +733,7 @@ object AutonomousScreenAgent {
                 goal = cleanGoal,
                 appHint = appHint,
                 recipientHint = effectiveRecipient,
+                profile = profile,
                 isDeictic = isDeictic,
                 messageHint = cleanMsg,
                 stopBeforeFinalSend = stopBeforeFinalSend,
@@ -580,6 +1039,7 @@ object AutonomousScreenAgent {
         svc: CubeAccessibilityService,
         obs: RichScreenObservation,
         cleanMsg: String,
+        profile: ResolvedRecipientProfile,
         effectiveRecipient: String,
         isDeictic: Boolean,
         stopBeforeFinalSend: Boolean,
@@ -587,8 +1047,8 @@ object AutonomousScreenAgent {
     ): AutonomousAgentResult? {
         val composer = findComposerNode(obs) ?: return null
         val isOpenChatMatch = isDeictic ||
-            effectiveRecipient.isBlank() ||
-            headerMatchesRecipient(obs, effectiveRecipient)
+            (effectiveRecipient.isBlank() && !profile.isSelfId) ||
+            headerMatchesProfile(obs, profile)
         if (!isOpenChatMatch) return null
 
         AppKnowledgeRegistry.recordLearnedRole(context, obs.packageName, "COMPOSER", composer.viewId, composer.bestLabel, composer.cx, composer.cy)
@@ -703,13 +1163,19 @@ object AutonomousScreenAgent {
     private fun findSendNode(obs: RichScreenObservation): RichUiNode? =
         obs.nodes.firstOrNull { isSendLikeNode(it, obs.screenWidth, obs.screenHeight) }
 
-    private fun headerMatchesRecipient(obs: RichScreenObservation, recipient: String): Boolean {
-        val clean = recipient.trim().lowercase()
-        if (clean.length < 2) return false
-        return obs.nodes.any { n ->
-            n.zone == "HEADER" && !n.editable &&
-                !n.viewId.lowercase().contains("search") &&
-                (n.text.lowercase().contains(clean) || n.contentDesc.lowercase().contains(clean))
+    private fun headerMatchesProfile(obs: RichScreenObservation, profile: ResolvedRecipientProfile): Boolean {
+        val headerNodes = obs.nodes.filter { n ->
+            n.zone == "HEADER" && !n.editable && !n.viewId.lowercase().contains("search")
+        }
+        if (headerNodes.isEmpty()) return false
+        val candidates = (profile.rowMatchKeywords + profile.searchQueries + listOf(profile.primaryDisplayName))
+            .map { it.trim().lowercase() }
+            .filter { it.length >= 2 }
+            .distinct()
+        if (candidates.isEmpty()) return false
+        return headerNodes.any { n ->
+            val combined = "${n.text} ${n.contentDesc}".lowercase()
+            candidates.any { kw -> combined.contains(kw) }
         }
     }
 
@@ -725,21 +1191,162 @@ object AutonomousScreenAgent {
         return candidate?.text?.trim().orEmpty()
     }
 
-    private fun findSingleMatchingContactRowInBody(obs: RichScreenObservation, recipient: String): RichUiNode? {
-        val q = recipient.trim().lowercase()
-        if (q.length < 2) return null
-        val matches = obs.nodes.filter { n ->
-            n.zone == "BODY" &&
-                n.clickable &&
-                !n.editable &&
-                (n.text.lowercase().contains(q) || n.contentDesc.lowercase().contains(q))
+    /**
+     * Finds the best matching contact or Self-ID row in [BODY] (chat list, search results, or New Chat list).
+     * Never clicks the top search bar, filter chips ("All", "Unread", "Groups"), or section headers.
+     */
+    private fun findBestMatchingContactRowInBody(
+        obs: RichScreenObservation,
+        profile: ResolvedRecipientProfile,
+        searchBarBottomY: Int
+    ): RichUiNode? {
+        val keywords = (profile.rowMatchKeywords + profile.searchQueries + listOf(profile.primaryDisplayName))
+            .map { it.trim().lowercase() }
+            .filter { it.length >= 2 }
+            .distinct()
+        if (keywords.isEmpty()) return null
+
+        val minRowY = maxOf((obs.screenHeight * 0.14f).toInt(), searchBarBottomY + 12)
+        val maxRowY = (obs.screenHeight * 0.88f).toInt()
+
+        val candidates = obs.nodes.filter { n ->
+            if (n.editable) return@filter false
+            if (n.cy !in minRowY..maxRowY) return@filter false
+            val idLow = n.viewId.lowercase()
+            if (idLow.contains("search") || idLow.contains("filter") || idLow.contains("tab") || idLow.contains("fab")) {
+                return@filter false
+            }
+            val label = n.bestLabel.trim().lowercase()
+            if (label.isBlank() || label in NON_CONTACT_ROW_LABELS) return@filter false
+            val fullText = "${n.text} ${n.contentDesc}".lowercase()
+            keywords.any { kw -> fullText.contains(kw) }
         }
-        // Only fast-tap when there is ONE clear distinct row (avoid guessing when 2+ similar names exist!)
-        if (matches.size == 1) return matches.first()
-        val exactMatches = matches.filter {
-            it.text.trim().equals(q, ignoreCase = true) || it.contentDesc.trim().equals(q, ignoreCase = true)
+
+        if (candidates.isEmpty()) return null
+
+        // Score candidates: exact contact-name ViewIds (`conversations_row_contact_name`, `contactpicker_row_name`),
+        // `(You)` / `Message yourself` for Self-ID, and exact/prefix matches win immediately.
+        return candidates.maxByOrNull { n ->
+            var score = 0
+            val idLow = n.viewId.lowercase()
+            val txtLow = n.text.trim().lowercase()
+            val descLow = n.contentDesc.trim().lowercase()
+            val combined = "$txtLow $descLow"
+
+            if (n.clickable) score += 200
+            if (idLow.contains("conversations_row_contact_name") ||
+                idLow.contains("contactpicker_row_name") ||
+                idLow.contains("contact_name") ||
+                idLow.contains("row_content") ||
+                idLow.contains("chat_list")
+            ) {
+                score += 450
+            }
+            if (profile.isSelfId && (
+                    combined.contains("(you)") ||
+                        combined.contains("message yourself") ||
+                        combined.contains("নিজেকে")
+                    )
+            ) {
+                score += 700
+            }
+            for (kw in keywords) {
+                if (txtLow == kw || descLow == kw) score += 500
+                else if (txtLow.startsWith(kw) || descLow.startsWith(kw)) score += 300
+                else if (combined.contains(kw)) score += 120
+            }
+            // Prefer upper result rows when scores are close
+            score - (n.cy / 20)
         }
-        return if (exactMatches.size == 1) exactMatches.first() else null
+    }
+
+    private fun findTopSearchEditableNode(obs: RichScreenObservation): RichUiNode? {
+        val maxSearchY = (obs.screenHeight * 0.32f).toInt()
+        return obs.nodes.firstOrNull { n ->
+            n.editable && n.cy <= maxSearchY && (
+                n.viewId.lowercase().contains("search") ||
+                    n.hintText.lowercase().contains("search") ||
+                    n.hintText.contains("খুঁজুন") ||
+                    n.hintText.contains("সার্চ") ||
+                    n.text.lowercase().contains("search") ||
+                    n.zone == "HEADER"
+                )
+        }
+    }
+
+    private fun findTopSearchTriggerNode(obs: RichScreenObservation): RichUiNode? {
+        val maxSearchY = (obs.screenHeight * 0.30f).toInt()
+        return obs.nodes
+            .filter { n ->
+                n.cy <= maxSearchY && (
+                    n.viewId.lowercase().let { id ->
+                        id.contains("menuitem_search") ||
+                            id.contains("search_bar") ||
+                            id.contains("search_src_text") ||
+                            id.contains("search_box") ||
+                            id.contains("menu_search") ||
+                            id.contains("action_search") ||
+                            id.endsWith("/search")
+                    } ||
+                        n.bestLabel.lowercase().let { lbl ->
+                            lbl == "search" ||
+                                lbl == "সার্চ" ||
+                                lbl == "খুঁজুন" ||
+                                lbl.contains("ask meta ai or search") ||
+                                lbl.contains("search…") ||
+                                lbl.contains("search...")
+                        }
+                    )
+            }
+            .minByOrNull { it.cy }
+    }
+
+    private fun findNewChatFabNode(obs: RichScreenObservation): RichUiNode? {
+        return obs.nodes.firstOrNull { n ->
+            val idLow = n.viewId.lowercase()
+            val lblLow = "${n.text} ${n.contentDesc}".lowercase()
+            n.clickable && !n.editable && (
+                idLow.endsWith(":id/fab") ||
+                    idLow.contains("new_chat") ||
+                    lblLow.contains("new chat") ||
+                    lblLow.contains("নতুন চ্যাট") ||
+                    lblLow.contains("select contact")
+                )
+        }
+    }
+
+    private fun findTopBackButton(obs: RichScreenObservation): RichUiNode? {
+        val maxHeaderY = (obs.screenHeight * 0.20f).toInt()
+        val maxLeftX = (obs.screenWidth * 0.28f).toInt()
+        return obs.nodes.firstOrNull { n ->
+            n.clickable && n.cy <= maxHeaderY && n.cx <= maxLeftX && (
+                n.viewId.lowercase().contains("back") ||
+                    n.viewId.lowercase().contains("up") ||
+                    n.contentDesc.lowercase().contains("navigate up") ||
+                    n.contentDesc.lowercase().contains("back") ||
+                    n.contentDesc.contains("ফিরে")
+                )
+        }
+    }
+
+    private fun isMessagingAppPackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        return p.contains("whatsapp") ||
+            p.contains("orca") ||
+            p.contains("telegram") ||
+            p.contains("instagram") ||
+            p.contains("messaging") ||
+            p.contains("mms")
+    }
+
+    private fun normalizePhoneForWhatsApp(rawPhone: String): String {
+        val digits = rawPhone.filter { it.isDigit() }
+        return when {
+            digits.startsWith("8801") && digits.length == 13 -> digits
+            digits.startsWith("01") && digits.length == 11 -> "88$digits"
+            digits.length >= 10 -> digits
+            else -> ""
+        }
     }
 
     private suspend fun maybeResolveWebContextForGoal(
@@ -815,6 +1422,7 @@ object AutonomousScreenAgent {
 
     private fun isDeicticReferenceInGoal(goal: String): Boolean {
         val lower = goal.lowercase()
+        if (isSelfRecipientReference("", lower)) return false
         return DEICTIC_TERMS.any { lower.contains(it) }
     }
 
@@ -895,6 +1503,7 @@ object AutonomousScreenAgent {
         goal: String,
         appHint: String,
         recipientHint: String,
+        profile: ResolvedRecipientProfile,
         isDeictic: Boolean,
         messageHint: String,
         stopBeforeFinalSend: Boolean,
@@ -909,10 +1518,20 @@ object AutonomousScreenAgent {
     ): String = buildString {
         appendLine("USER GOAL: $goal")
         if (appHint.isNotBlank()) appendLine("TARGET_APP_HINT: $appHint")
-        if (isDeictic) {
-            appendLine("RECIPIENT_CONTEXT: Deictic ('একে/ওকে/this person') -> Read the open screen header/profile! Do NOT search 'একে' or 'ওকে'.")
-        } else if (recipientHint.isNotBlank()) {
-            appendLine("TARGET_RECIPIENT_OR_ID: $recipientHint")
+        when {
+            isDeictic -> {
+                appendLine("RECIPIENT_CONTEXT: Deictic ('একে/ওকে/this person') -> Read the open screen header/profile! Do NOT search 'একে' or 'ওকে'.")
+            }
+            profile.isSelfId -> {
+                appendLine("RECIPIENT_CONTEXT: SELF_ID (Boss wants to message their OWN account/ID!).")
+                appendLine("HOW_TO_FIND_SELF_ID: Look for row containing '(You)', 'Message yourself', 'নিজেকে', or Boss name '${profile.primaryDisplayName}'. If not visible, tap Top Search bar and search '${profile.searchQueries.joinToString("', '")}', OR tap 'New chat' FAB (where '(You) Message yourself' is row #1).")
+            }
+            recipientHint.isNotBlank() -> {
+                appendLine("TARGET_RECIPIENT_OR_ID: $recipientHint")
+                if (profile.searchQueries.isNotEmpty()) {
+                    appendLine("CANDIDATE_SEARCH_QUERIES (English + Bangla): ${profile.searchQueries.joinToString(", ")}")
+                }
+            }
         }
         if (messageHint.isNotBlank()) appendLine("MESSAGE_TO_SEND: $messageHint")
         appendLine("FINAL_SEND_MODE: ${if (stopBeforeFinalSend) "STOP_AND_LOCK_ON_SEND_BUTTON" else "AUTO_COMPLETE (use TYPE_AND_SEND when composer+send or open composer is ready)"}")
@@ -1064,9 +1683,11 @@ ACT FAST USING MINIMAL ROUNDTRIPS:
 1. UNDERSTAND APP & SCREEN FIRST:
    - Read `APP_KNOWLEDGE_BLUEPRINT`, `FOREGROUND_APP`, and `[HEADER]` first.
    - Deictic pronoun ("একে", "ওকে", "তাকে", "এই আইডিতে"): if a chat composer in `[BOTTOM]` is open -> use `TYPE_AND_SEND` immediately! If on a user's PROFILE -> tap "Message" (`TYPE` not needed yet). If on a list with no open person -> `status="NEED_USER_CHOICE"`.
+   - SELF-ID ("আমার আইডি", "আমার আইডিতে মেসেজ দেও", "নিজের আইডিতে"): NEVER search the literal Bangla phrase "আমার আইডি"! Instead look for the row containing `(You)`, `Message yourself`, `নিজেকে`, or the user's own name from `CANDIDATE_SEARCH_QUERIES`, OR tap the top Search bar and search `(You)` / Boss's English name, OR tap the `New chat` FAB (`com.whatsapp:id/fab`) where `(You) Message yourself` is ALWAYS the first contact row!
 2. FAST BATCHED NAVIGATION TO FIND RECIPIENT/ID:
-   - If the target ID/contact row is visible in `[BODY]` -> `TAP_NODE` on that row! (Never tap a Search bar label when tapping a contact row).
-   - If NOT visible -> combine opening Search AND typing in ONE turn: `action="TAP_NODE"`, `node_index=<search_icon>`, `next_action="TYPE_TEXT"`, `next_text="<recipient name>"`, `next_submit_enter=true`! OR if a search input box is already visible/focused, `TYPE_TEXT` directly with `submit_enter=true`.
+   - If the target ID/contact row is visible in `[BODY]` -> `TAP_NODE` on that row! (Never tap a Search bar or filter chip like "All"/"Unread" when trying to open a contact row).
+   - If NOT visible in `[BODY]` -> immediately go to the TOP SEARCH BAR (`menuitem_search`, `search_bar`, `search_src_text`, "Search", "Ask Meta AI or Search"): use `action="TYPE_TEXT"` on the search bar/icon with `text="<best English or Bangla query from CANDIDATE_SEARCH_QUERIES>"` and `submit_enter=true` (our executor automatically taps to expand the search bar and types the query!).
+   - If a Bangla query returned no results, try the English phonetic query from `CANDIDATE_SEARCH_QUERIES`.
    - When user implies scrolling or search doesn't fit -> `SCROLL_DOWN`. If wrong popup/chat opened -> `BACK`.
    - Need live internet info to type or answer? Use `action="SEARCH_INTERNET"` with `text="<search query or URL>"`.
 3. COMPOSER vs SEARCH BAR (NEVER CONFUSE):

@@ -25,6 +25,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.ln
+import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -52,6 +53,80 @@ enum class DetectedSpeakerGender(
     }
 }
 
+enum class SpeakerRole(
+    val id: String,
+    val labelBn: String,
+    val labelEn: String,
+    val defaultGeneralChat: Boolean,
+    val defaultAppControl: Boolean,
+    val defaultSensitiveActions: Boolean
+) {
+    OWNER_BOSS("OWNER_BOSS", "বস (Owner)", "Boss", true, true, true),
+    TRUSTED_FAMILY("TRUSTED_FAMILY", "পরিবার (Trusted)", "Family", true, true, false),
+    GUEST_FRIEND("GUEST_FRIEND", "অতিথি / বন্ধু", "Guest", true, false, false),
+    RESTRICTED_CHILD("RESTRICTED_CHILD", "শিশু (Safe Mode)", "Child", true, false, false);
+
+    companion object {
+        fun fromString(raw: String?, isOwnerBossFallback: Boolean = false): SpeakerRole {
+            val v = raw?.trim()?.uppercase().orEmpty()
+            return when {
+                v.contains("BOSS") || v.contains("OWNER") || v.contains("বস") -> OWNER_BOSS
+                v.contains("FAMILY") || v.contains("TRUSTED") || v.contains("পরিবার") -> TRUSTED_FAMILY
+                v.contains("CHILD") || v.contains("KID") || v.contains("শিশু") -> RESTRICTED_CHILD
+                v.contains("GUEST") || v.contains("FRIEND") || v.contains("অতিথি") || v.contains("বন্ধু") -> GUEST_FRIEND
+                isOwnerBossFallback -> OWNER_BOSS
+                else -> GUEST_FRIEND
+            }
+        }
+    }
+}
+
+enum class DetectedSpeakerMood(
+    val id: String,
+    val labelBn: String,
+    val labelEn: String,
+    val emoji: String
+) {
+    CALM("CALM", "শান্ত ও স্বাভাবিক", "Calm", "😌"),
+    HAPPY("HAPPY", "খুশি ও প্রাণবন্ত", "Happy", "😊"),
+    URGENT("URGENT", "তাড়া / দ্রুত", "Urgent", "⚡"),
+    STRESSED("STRESSED", "রাগ / উত্তেজিত", "Stressed", "😤"),
+    TIRED("TIRED", "নিচু / ধীর", "Quiet", "🌙")
+}
+
+data class VoiceSecurityLogEntry(
+    val id: String,
+    val timestampFormatted: String,
+    val eventType: String,
+    val speakerName: String,
+    val summaryBn: String,
+    val isWarning: Boolean = false
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("timestampFormatted", timestampFormatted)
+        put("eventType", eventType)
+        put("speakerName", speakerName)
+        put("summaryBn", summaryBn)
+        put("isWarning", isWarning)
+    }
+
+    companion object {
+        fun fromJson(obj: JSONObject): VoiceSecurityLogEntry? {
+            val summary = obj.optString("summaryBn").trim()
+            if (summary.isBlank()) return null
+            return VoiceSecurityLogEntry(
+                id = obj.optString("id").ifBlank { "log_${System.currentTimeMillis()}" },
+                timestampFormatted = obj.optString("timestampFormatted", ""),
+                eventType = obj.optString("eventType", "INFO"),
+                speakerName = obj.optString("speakerName", "অজানা"),
+                summaryBn = summary,
+                isWarning = obj.optBoolean("isWarning", false)
+            )
+        }
+    }
+}
+
 data class EnrolledVoiceProfile(
     val id: String,
     val speakerName: String,
@@ -67,7 +142,12 @@ data class EnrolledVoiceProfile(
     val signatureWords: List<String> = emptyList(),
     val sampleCount: Int = 1,
     val embedding: List<Float>,
-    val enrolledAtFormatted: String
+    val enrolledAtFormatted: String,
+    val role: SpeakerRole = if (isOwnerBoss) SpeakerRole.OWNER_BOSS else SpeakerRole.GUEST_FRIEND,
+    val allowGeneralChat: Boolean = true,
+    val allowAppControl: Boolean = isOwnerBoss,
+    val allowSensitiveActions: Boolean = isOwnerBoss,
+    val lastSeenFormatted: String = enrolledAtFormatted
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -89,6 +169,11 @@ data class EnrolledVoiceProfile(
             embedding.forEach { put(it.toDouble()) }
         })
         put("enrolledAtFormatted", enrolledAtFormatted)
+        put("role", role.id)
+        put("allowGeneralChat", allowGeneralChat)
+        put("allowAppControl", allowAppControl)
+        put("allowSensitiveActions", allowSensitiveActions)
+        put("lastSeenFormatted", lastSeenFormatted)
     }
 
     companion object {
@@ -112,10 +197,13 @@ data class EnrolledVoiceProfile(
                 }
             }
             val meanP = obj.optDouble("meanPitchHz", 130.0).toFloat()
+            val isBoss = obj.optBoolean("isOwnerBoss", false)
+            val parsedRole = SpeakerRole.fromString(obj.optString("role", ""), isOwnerBossFallback = isBoss)
+            val enrolledAt = obj.optString("enrolledAtFormatted", "")
             return EnrolledVoiceProfile(
                 id = obj.optString("id").ifBlank { "vp_${name.lowercase()}" },
                 speakerName = name,
-                isOwnerBoss = obj.optBoolean("isOwnerBoss", false),
+                isOwnerBoss = isBoss,
                 gender = DetectedSpeakerGender.fromString(obj.optString("gender", "MALE")),
                 meanPitchHz = meanP,
                 minPitchHz = obj.optDouble("minPitchHz", (meanP - 25f).toDouble()).toFloat(),
@@ -127,7 +215,12 @@ data class EnrolledVoiceProfile(
                 signatureWords = words,
                 sampleCount = obj.optInt("sampleCount", 1).coerceAtLeast(1),
                 embedding = emb,
-                enrolledAtFormatted = obj.optString("enrolledAtFormatted", "")
+                enrolledAtFormatted = enrolledAt,
+                role = parsedRole,
+                allowGeneralChat = obj.optBoolean("allowGeneralChat", parsedRole.defaultGeneralChat),
+                allowAppControl = obj.optBoolean("allowAppControl", parsedRole.defaultAppControl),
+                allowSensitiveActions = obj.optBoolean("allowSensitiveActions", parsedRole.defaultSensitiveActions),
+                lastSeenFormatted = obj.optString("lastSeenFormatted", enrolledAt)
             )
         }
     }
@@ -155,7 +248,19 @@ data class VoiceBiometricsState(
     val enrollmentProgressPercent: Int = 0,
     val enrolledProfiles: List<EnrolledVoiceProfile> = emptyList(),
     val liveHudBadgeText: String = "🎙️ ভয়েস বায়োমেট্রিক্স প্রস্তুত • বসের ভয়েস ট্রেনিং করুন",
-    val lastSecurityGateEventBn: String = ""
+    val lastSecurityGateEventBn: String = "",
+    // Advanced telemetry fields
+    val waveformBars: List<Float> = List(14) { 0.08f },
+    val noiseFloorRms: Float = 90f,
+    val snrDb: Int = 18,
+    val isNoiseCalibrating: Boolean = false,
+    val antiSpoofLivenessScore: Int = 96,
+    val isSuspectedSpoof: Boolean = false,
+    val antiSpoofStrictMode: Boolean = false,
+    val spoofReasonBn: String = "",
+    val detectedMood: DetectedSpeakerMood = DetectedSpeakerMood.CALM,
+    val activeSpeakerRole: SpeakerRole = SpeakerRole.OWNER_BOSS,
+    val securityLogs: List<VoiceSecurityLogEntry> = emptyList()
 )
 
 /**
@@ -167,8 +272,12 @@ object VoiceBiometricsEngine {
     private const val PREFS_NAME = "archer_voice_biometrics_prefs"
     private const val KEY_PROFILES_JSON = "enrolled_voice_profiles_json"
     private const val KEY_SECURITY_LOCK_ENABLED = "voice_security_lock_enabled"
+    private const val KEY_ANTI_SPOOF_STRICT = "voice_anti_spoof_strict_mode"
+    private const val KEY_NOISE_FLOOR_RMS = "voice_adaptive_noise_floor_rms"
+    private const val KEY_SECURITY_LOGS_JSON = "voice_security_logs_json"
     private const val SAMPLE_RATE = 16000
     private const val EMBEDDING_DIM = 16
+    private const val WAVEFORM_BAR_COUNT = 14
 
     /**
      * 3 Guided Calibration Sentences designed to capture Boss's full vocal frequency range,
@@ -197,12 +306,17 @@ object VoiceBiometricsEngine {
     private val rollingCentroidHistory = ArrayDeque<Float>(120)
     private val rollingEmbeddings = ArrayDeque<FloatArray>(120)
     private val rollingSpokenWords = ArrayDeque<String>(40)
+    private val rollingAntiSpoofScores = ArrayDeque<Int>(24)
+    private val rollingRmsHistory = ArrayDeque<Float>(30)
+    private val rollingTranscriptTimestamps = ArrayDeque<Long>(16)
 
-    // Active enrollment buffers
+    // Active enrollment & noise calibration buffers
     private val enrollmentPitches = mutableListOf<Float>()
     private val enrollmentCentroids = mutableListOf<Float>()
     private val enrollmentEmbeddings = mutableListOf<FloatArray>()
+    private val noiseCalibrationSamples = mutableListOf<Float>()
     private var standaloneEnrollmentJob: Job? = null
+    private var noiseCalibrationJob: Job? = null
 
     @Volatile
     private var lastLiveMicStreamFrameAtMs: Long = 0L
@@ -216,23 +330,36 @@ object VoiceBiometricsEngine {
     @Volatile
     private var unknownSpeakerConsecutiveFrames: Int = 0
 
+    @Volatile
+    private var spoofConsecutiveFrames: Int = 0
+
+    @Volatile
+    private var lastSecurityLogAtMs: Long = 0L
+
     fun init(context: Context) {
         if (isInitialized) return
         isInitialized = true
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val lockEnabled = prefs.getBoolean(KEY_SECURITY_LOCK_ENABLED, true)
+        val strictAntiSpoof = prefs.getBoolean(KEY_ANTI_SPOOF_STRICT, false)
+        val savedNoiseFloor = prefs.getFloat(KEY_NOISE_FLOOR_RMS, 90f).coerceIn(45f, 450f)
         val rawJson = prefs.getString(KEY_PROFILES_JSON, "[]").orEmpty()
         val loaded = parseProfilesJson(rawJson)
+        val savedLogs = parseSecurityLogsJson(prefs.getString(KEY_SECURITY_LOGS_JSON, "[]").orEmpty())
         val hasBoss = loaded.any { it.isOwnerBoss }
         val bossProf = loaded.firstOrNull { it.isOwnerBoss }
         _state.value = _state.value.copy(
             enrolledProfiles = loaded,
             hasOwnerBossProfile = hasBoss,
             isVoiceSecurityLockEnabled = lockEnabled,
+            antiSpoofStrictMode = strictAntiSpoof,
+            noiseFloorRms = savedNoiseFloor,
             isOwnerBossVerified = true,
             activeSpeakerName = bossProf?.speakerName ?: "বস",
+            activeSpeakerRole = bossProf?.role ?: SpeakerRole.OWNER_BOSS,
             detectedGender = bossProf?.gender ?: DetectedSpeakerGender.MALE,
             currentCalibrationSentenceBn = BOSS_CALIBRATION_SENTENCES.first(),
+            securityLogs = savedLogs,
             liveHudBadgeText = if (hasBoss) {
                 "🎙️ বক্তা: ${bossProf?.speakerName ?: "বস"} (${(bossProf?.gender ?: DetectedSpeakerGender.MALE).labelEn} • Verified)"
             } else {
@@ -282,20 +409,179 @@ object VoiceBiometricsEngine {
             .edit()
             .putBoolean(KEY_SECURITY_LOCK_ENABLED, enabled)
             .apply()
+        val msg = if (enabled) {
+            "🔒 বসের ভয়েস সিকিউরিটি লক চালু করা হয়েছে।"
+        } else {
+            "🔓 ভয়েস সিকিউরিটি লক সাময়িকভাবে বন্ধ করা হয়েছে।"
+        }
         _state.value = _state.value.copy(
             isVoiceSecurityLockEnabled = enabled,
-            lastSecurityGateEventBn = if (enabled) {
-                "🔒 বসের ভয়েস সিকিউরিটি লক চালু করা হয়েছে।"
-            } else {
-                "🔓 ভয়েস সিকিউরিটি লক সাময়িকভাবে বন্ধ করা হয়েছে।"
-            }
+            lastSecurityGateEventBn = msg
         )
-        return _state.value.lastSecurityGateEventBn
+        appendSecurityLog(context, "LOCK_TOGGLED", _state.value.activeSpeakerName, msg, isWarning = !enabled)
+        return msg
+    }
+
+    fun setAntiSpoofStrictMode(context: Context, strict: Boolean): String {
+        init(context)
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_ANTI_SPOOF_STRICT, strict)
+            .apply()
+        val msg = if (strict) {
+            "🛡️ অ্যান্টি-স্পুফিং শিল্ড 'Strict' মোডে চালু হয়েছে—রেকর্ডেড বা লাউডস্পিকার কণ্ঠ কঠোরভাবে ব্লক হবে।"
+        } else {
+            "🛡️ অ্যান্টি-স্পুফিং শিল্ড 'Standard' মোডে রাখা হয়েছে।"
+        }
+        _state.value = _state.value.copy(
+            antiSpoofStrictMode = strict,
+            lastSecurityGateEventBn = msg
+        )
+        appendSecurityLog(context, "SHIELD_MODE", _state.value.activeSpeakerName, msg, isWarning = false)
+        return msg
+    }
+
+    fun updateSpeakerRoleAndPermissions(
+        context: Context,
+        profileIdOrName: String,
+        newRole: SpeakerRole,
+        allowGeneralChat: Boolean = newRole.defaultGeneralChat,
+        allowAppControl: Boolean = newRole.defaultAppControl,
+        allowSensitiveActions: Boolean = newRole.defaultSensitiveActions
+    ): String {
+        init(context)
+        val currentList = _state.value.enrolledProfiles
+        val idx = currentList.indexOfFirst {
+            it.id.equals(profileIdOrName, ignoreCase = true) ||
+                it.speakerName.equals(profileIdOrName, ignoreCase = true)
+        }
+        if (idx < 0) return "'$profileIdOrName' প্রোফাইল পাওয়া যায়নি।"
+        val target = currentList[idx]
+        val effectiveBoss = target.isOwnerBoss || newRole == SpeakerRole.OWNER_BOSS
+        val updated = target.copy(
+            isOwnerBoss = effectiveBoss,
+            role = if (target.isOwnerBoss) SpeakerRole.OWNER_BOSS else newRole,
+            allowGeneralChat = if (effectiveBoss) true else allowGeneralChat,
+            allowAppControl = if (effectiveBoss) true else allowAppControl,
+            allowSensitiveActions = if (effectiveBoss) true else allowSensitiveActions
+        )
+        val mutable = currentList.toMutableList()
+        mutable[idx] = updated
+        saveProfilesToLocalAndSyncTo5TbDrive(context, mutable, updated)
+
+        val currentActive = _state.value.activeSpeakerName.equals(updated.speakerName, ignoreCase = true)
+        _state.value = _state.value.copy(
+            enrolledProfiles = mutable,
+            activeSpeakerRole = if (currentActive) updated.role else _state.value.activeSpeakerRole
+        )
+        val msg = "✅ '${updated.speakerName}'-এর রোল '${updated.role.labelBn}' (Chat: $allowGeneralChat, Apps: $allowAppControl, Sensitive: $allowSensitiveActions) সেট করা হয়েছে।"
+        appendSecurityLog(context, "ROLE_CHANGED", updated.speakerName, msg, isWarning = false)
+        return msg
+    }
+
+    fun clearSecurityLogs(context: Context) {
+        init(context)
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_SECURITY_LOGS_JSON, "[]")
+            .apply()
+        _state.value = _state.value.copy(securityLogs = emptyList())
+    }
+
+    @SuppressLint("MissingPermission")
+    fun startTwoSecondNoiseCalibration(
+        context: Context,
+        onComplete: (String) -> Unit = {}
+    ) {
+        init(context)
+        noiseCalibrationJob?.cancel()
+        synchronized(rollingFrameLock) {
+            noiseCalibrationSamples.clear()
+        }
+        _state.value = _state.value.copy(
+            isNoiseCalibrating = true,
+            liveHudBadgeText = "🎛️ রুমের নয়েজ লেভেল মাপা হচ্ছে (২ সেকেন্ড শান্ত থাকুন)..."
+        )
+        noiseCalibrationJob = scope.launch {
+            val hasPerm = ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            val liveStreamActive = (System.currentTimeMillis() - lastLiveMicStreamFrameAtMs) < 1500L
+            var tempRecorder: AudioRecord? = null
+            if (!liveStreamActive && hasPerm) {
+                runCatching {
+                    val minBuf = AudioRecord.getMinBufferSize(
+                        SAMPLE_RATE,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT
+                    ).coerceAtLeast(3200)
+                    tempRecorder = AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                        SAMPLE_RATE,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        minBuf * 2
+                    )
+                    if (tempRecorder?.state == AudioRecord.STATE_INITIALIZED) {
+                        tempRecorder?.startRecording()
+                    }
+                }
+            }
+            val startMs = System.currentTimeMillis()
+            val pcmBuf = ByteArray(1600)
+            try {
+                while (System.currentTimeMillis() - startMs < 2000L) {
+                    val rec = tempRecorder
+                    if (rec != null && rec.RecordingStateSafe() == AudioRecord.RECORDSTATE_RECORDING) {
+                        val readBytes = rec.read(pcmBuf, 0, pcmBuf.size)
+                        if (readBytes > 0) {
+                            processIncoming16kHzPcmFrame(
+                                context = context,
+                                pcm16LeBytes = pcmBuf.copyOf(readBytes),
+                                isAgentCurrentlySpeaking = false,
+                                fromLiveStream = false
+                            )
+                        }
+                    } else {
+                        delay(80L)
+                    }
+                }
+            } finally {
+                runCatching { tempRecorder?.stop() }
+                runCatching { tempRecorder?.release() }
+            }
+
+            val measuredFloor = synchronized(rollingFrameLock) {
+                if (noiseCalibrationSamples.isNotEmpty()) {
+                    medianFloat(noiseCalibrationSamples).coerceIn(55f, 420f)
+                } else {
+                    _state.value.noiseFloorRms
+                }
+            }
+            context.applicationContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putFloat(KEY_NOISE_FLOOR_RMS, measuredFloor)
+                .apply()
+
+            val msg = "🎛️ অ্যাডাপটিভ নয়েজ ফিল্টার ক্যালিব্রেট সম্পন্ন (Noise Floor: ${measuredFloor.toInt()} RMS)।"
+            _state.value = _state.value.copy(
+                isNoiseCalibrating = false,
+                noiseFloorRms = measuredFloor,
+                liveHudBadgeText = msg
+            )
+            appendSecurityLog(context, "NOISE_CALIBRATED", _state.value.activeSpeakerName, msg, isWarning = false)
+            onComplete(msg)
+        }
     }
 
     /**
      * Real-time 16kHz PCM audio frame analyzer called from `MultimodalLiveService` or standalone calibration.
-     * Uses sensitive voice threshold (RMS >= 135) so normal and soft natural speech is always recognized!
+     * Includes adaptive noise-floor tracking, pre-emphasis rumble filtering, 14-band waveform extraction,
+     * anti-spoofing liveness analysis, and real-time emotion/mood inference.
      */
     fun processIncoming16kHzPcmFrame(
         context: Context,
@@ -308,54 +594,118 @@ object VoiceBiometricsEngine {
         if (fromLiveStream) {
             lastLiveMicStreamFrameAtMs = now
         }
-        val minInterval = if (_state.value.isEnrolling) 35L else 65L
+        val minInterval = if (_state.value.isEnrolling) 32L else 55L
         if (now - lastAnalyzedFrameAtMs < minInterval) return
 
         val sampleCount = pcm16LeBytes.size / 2
-        val samples = FloatArray(sampleCount)
+        val rawSamples = FloatArray(sampleCount)
         var sumSq = 0.0
+        var clipCount = 0
         var i = 0
         var sIdx = 0
         while (i + 1 < pcm16LeBytes.size && sIdx < sampleCount) {
             val lo = pcm16LeBytes[i].toInt() and 0xFF
             val hi = pcm16LeBytes[i + 1].toInt()
             val v = ((hi shl 8) or lo).toShort().toFloat()
-            samples[sIdx++] = v
+            rawSamples[sIdx++] = v
             sumSq += (v * v).toDouble()
+            if (abs(v) >= 31200f) clipCount++
             i += 2
         }
         val rms = sqrt(sumSq / sampleCount.coerceAtLeast(1)).toFloat()
         val normRms = (rms / 2200f).coerceIn(0f, 1f)
 
-        // Responsive threshold (135f) so even normal/quiet human speech is picked up reliably
-        if (rms < 135f) {
-            if (now - lastAnalyzedFrameAtMs > 1800L && _state.value.isCurrentlySpeaking) {
-                _state.value = _state.value.copy(
-                    isCurrentlySpeaking = false,
-                    liveVoiceRmsLevel = 0f
-                )
+        // If calibrating quiet noise floor, capture raw RMS directly
+        if (_state.value.isNoiseCalibrating) {
+            synchronized(rollingFrameLock) {
+                noiseCalibrationSamples.add(rms)
             }
+            val calibBars = extractMultiBandWaveform(rawSamples, SAMPLE_RATE, _state.value.waveformBars)
+            _state.value = _state.value.copy(
+                waveformBars = calibBars,
+                liveVoiceRmsLevel = normRms
+            )
+            return
+        }
+
+        // First-order pre-emphasis high-pass copy to attenuate 50/60Hz fan/AC hum
+        val cleanSamples = FloatArray(sampleCount)
+        if (sampleCount > 0) {
+            cleanSamples[0] = rawSamples[0]
+            for (k in 1 until sampleCount) {
+                cleanSamples[k] = rawSamples[k] - 0.92f * rawSamples[k - 1]
+            }
+        }
+
+        val currentNoiseFloor = _state.value.noiseFloorRms.coerceIn(55f, 420f)
+        val dynamicGate = max(125f, currentNoiseFloor * 1.65f)
+        val snrDb = (20.0 * log10((rms.coerceAtLeast(12f) / currentNoiseFloor.coerceAtLeast(25f)).toDouble()))
+            .toInt()
+            .coerceIn(0, 48)
+
+        // Gentle adaptive noise floor tracking during low-energy background frames
+        if (rms < dynamicGate) {
+            val updatedFloor = (currentNoiseFloor * 0.96f + rms.coerceIn(50f, 380f) * 0.04f).coerceIn(55f, 420f)
+            val decayedBars = _state.value.waveformBars.map { (it * 0.65f).coerceAtLeast(0.07f) }
+            val stillSpeaking = (now - lastAnalyzedFrameAtMs) <= 1400L && _state.value.isCurrentlySpeaking
+            _state.value = _state.value.copy(
+                noiseFloorRms = updatedFloor,
+                snrDb = if (stillSpeaking) _state.value.snrDb else 0,
+                isCurrentlySpeaking = stillSpeaking,
+                liveVoiceRmsLevel = if (stillSpeaking) normRms else 0f,
+                waveformBars = decayedBars
+            )
             return
         }
         lastAnalyzedFrameAtMs = now
 
-        val pitchHz = estimateFundamentalPitchYinHz(samples, SAMPLE_RATE)
+        val waveformBars = extractMultiBandWaveform(rawSamples, SAMPLE_RATE, _state.value.waveformBars)
+        val pitchHz = estimateFundamentalPitchYinHz(rawSamples, SAMPLE_RATE)
         if (pitchHz !in 72f..420f) {
-            _state.value = _state.value.copy(liveVoiceRmsLevel = normRms)
+            _state.value = _state.value.copy(
+                liveVoiceRmsLevel = normRms,
+                waveformBars = waveformBars,
+                snrDb = snrDb
+            )
             return
         }
 
-        val spectralCentroid = computeSpectralCentroidHz(samples, SAMPLE_RATE)
-        val embedding = extractNormalizedVocalTimbreEmbedding(samples, SAMPLE_RATE, pitchHz, spectralCentroid)
+        val spectralCentroid = computeSpectralCentroidHz(cleanSamples, SAMPLE_RATE)
+        val embedding = extractNormalizedVocalTimbreEmbedding(rawSamples, SAMPLE_RATE, pitchHz, spectralCentroid)
+        val frameLivenessScore = estimateAcousticLivenessScore(
+            rawSamples = rawSamples,
+            sampleRate = SAMPLE_RATE,
+            clipFraction = clipCount.toFloat() / sampleCount.coerceAtLeast(1)
+        )
 
         var collectedEnrollmentFrames = 0
+        val avgLiveness: Int
+        val moodEstimate: DetectedSpeakerMood
         synchronized(rollingFrameLock) {
             if (rollingPitchHistory.size >= 110) rollingPitchHistory.removeFirst()
             if (rollingCentroidHistory.size >= 110) rollingCentroidHistory.removeFirst()
             if (rollingEmbeddings.size >= 110) rollingEmbeddings.removeFirst()
+            if (rollingAntiSpoofScores.size >= 14) rollingAntiSpoofScores.removeFirst()
+            if (rollingRmsHistory.size >= 20) rollingRmsHistory.removeFirst()
+
             rollingPitchHistory.addLast(pitchHz)
             rollingCentroidHistory.addLast(spectralCentroid)
             rollingEmbeddings.addLast(embedding)
+            rollingAntiSpoofScores.addLast(frameLivenessScore)
+            rollingRmsHistory.addLast(rms)
+
+            avgLiveness = if (rollingAntiSpoofScores.isNotEmpty()) {
+                rollingAntiSpoofScores.average().toInt().coerceIn(5, 99)
+            } else frameLivenessScore
+
+            moodEstimate = inferSpeakerMood(
+                recentPitches = rollingPitchHistory.takeLast(14),
+                recentRms = rollingRmsHistory.takeLast(14),
+                centroidHz = spectralCentroid,
+                baselinePitchHz = _state.value.enrolledProfiles
+                    .firstOrNull { it.speakerName == _state.value.activeSpeakerName }
+                    ?.meanPitchHz ?: 145f
+            )
 
             if (_state.value.isEnrolling) {
                 enrollmentPitches.add(pitchHz)
@@ -363,6 +713,18 @@ object VoiceBiometricsEngine {
                 enrollmentEmbeddings.add(embedding)
                 collectedEnrollmentFrames = enrollmentEmbeddings.size
             }
+        }
+
+        val spoofLimit = if (_state.value.antiSpoofStrictMode) 56 else 40
+        if (avgLiveness < spoofLimit) spoofConsecutiveFrames++ else spoofConsecutiveFrames = 0
+        val suspectedSpoof = spoofConsecutiveFrames >= 4
+        val spoofReason = if (suspectedSpoof) {
+            "সম্ভাব্য রেকর্ডেড বা লাউডস্পিকার অডিও শনাক্ত হয়েছে (Liveness $avgLiveness%)"
+        } else ""
+
+        if (suspectedSpoof && now - lastSecurityLogAtMs > 5000L) {
+            lastSecurityLogAtMs = now
+            appendSecurityLog(context, "SPOOF_WARNING", _state.value.activeSpeakerName, spoofReason, isWarning = true)
         }
 
         // If actively enrolling via Guided 3-Sentence Training, update sentence step based on real voiced frames
@@ -378,6 +740,12 @@ object VoiceBiometricsEngine {
                 currentPitchHz = pitchHz.toInt(),
                 spectralCentroidHz = spectralCentroid.toInt(),
                 liveVoiceRmsLevel = normRms,
+                waveformBars = waveformBars,
+                snrDb = snrDb,
+                antiSpoofLivenessScore = avgLiveness,
+                isSuspectedSpoof = suspectedSpoof,
+                spoofReasonBn = spoofReason,
+                detectedMood = moodEstimate,
                 isCurrentlySpeaking = true,
                 enrollmentProgressPercent = pct,
                 enrollmentStepIndex = stepIdx,
@@ -406,7 +774,13 @@ object VoiceBiometricsEngine {
             centroidHz = smoothedCentroid,
             liveEmbedding = smoothedEmbedding,
             acousticGender = acousticGender,
-            normRms = normRms
+            normRms = normRms,
+            waveformBars = waveformBars,
+            snrDb = snrDb,
+            livenessScore = avgLiveness,
+            suspectedSpoof = suspectedSpoof,
+            spoofReason = spoofReason,
+            mood = moodEstimate
         )
     }
 
@@ -763,7 +1137,13 @@ object VoiceBiometricsEngine {
         centroidHz: Float,
         liveEmbedding: FloatArray,
         acousticGender: DetectedSpeakerGender,
-        normRms: Float
+        normRms: Float,
+        waveformBars: List<Float>,
+        snrDb: Int,
+        livenessScore: Int,
+        suspectedSpoof: Boolean,
+        spoofReason: String,
+        mood: DetectedSpeakerMood
     ) {
         val current = _state.value
         val profiles = current.enrolledProfiles
@@ -773,6 +1153,7 @@ object VoiceBiometricsEngine {
             val badge = "🎙️ কণ্ঠ শনাক্ত: ${acousticGender.labelBn} (${acousticGender.labelEn} • ${pitchHz.toInt()}Hz) • ভয়েস ট্রেনিং করুন"
             _state.value = current.copy(
                 activeSpeakerName = "বস (${acousticGender.labelBn})",
+                activeSpeakerRole = SpeakerRole.OWNER_BOSS,
                 isOwnerBossVerified = true,
                 isKnownEnrolledSpeaker = false,
                 isWaitingForNewSpeakerName = false,
@@ -782,6 +1163,12 @@ object VoiceBiometricsEngine {
                 spectralCentroidHz = centroidHz.toInt(),
                 similarityScorePercent = 0,
                 liveVoiceRmsLevel = normRms,
+                waveformBars = waveformBars,
+                snrDb = snrDb,
+                antiSpoofLivenessScore = livenessScore,
+                isSuspectedSpoof = suspectedSpoof,
+                spoofReasonBn = spoofReason,
+                detectedMood = mood,
                 isCurrentlySpeaking = true,
                 liveHudBadgeText = badge
             )
@@ -811,7 +1198,7 @@ object VoiceBiometricsEngine {
 
         if (bestProfile != null && bestScore >= matchedThreshold) {
             unknownSpeakerConsecutiveFrames = 0
-            val isBoss = bestProfile.isOwnerBoss
+            val isBoss = bestProfile.isOwnerBoss && !suspectedSpoof
             if (isBoss) {
                 lastVerifiedBossAtMs = System.currentTimeMillis()
             }
@@ -826,6 +1213,7 @@ object VoiceBiometricsEngine {
             )
             _state.value = current.copy(
                 activeSpeakerName = bestProfile.speakerName,
+                activeSpeakerRole = bestProfile.role,
                 isOwnerBossVerified = isBoss,
                 isKnownEnrolledSpeaker = true,
                 isWaitingForNewSpeakerName = false,
@@ -835,12 +1223,19 @@ object VoiceBiometricsEngine {
                 spectralCentroidHz = centroidHz.toInt(),
                 similarityScorePercent = simPct,
                 liveVoiceRmsLevel = normRms,
+                waveformBars = waveformBars,
+                snrDb = snrDb,
+                antiSpoofLivenessScore = livenessScore,
+                isSuspectedSpoof = suspectedSpoof,
+                spoofReasonBn = spoofReason,
+                detectedMood = mood,
                 isCurrentlySpeaking = true,
                 liveHudBadgeText = badge
             )
         } else {
             val bossProfile = profiles.firstOrNull { it.isOwnerBoss }
             val withinBossGrace = bossProfile != null &&
+                !suspectedSpoof &&
                 (System.currentTimeMillis() - lastVerifiedBossAtMs < 4500L) &&
                 abs(pitchHz - bossProfile.meanPitchHz) < 48f
 
@@ -856,6 +1251,7 @@ object VoiceBiometricsEngine {
                 )
                 _state.value = current.copy(
                     activeSpeakerName = bossProfile.speakerName,
+                    activeSpeakerRole = bossProfile.role,
                     isOwnerBossVerified = true,
                     isKnownEnrolledSpeaker = true,
                     isWaitingForNewSpeakerName = false,
@@ -865,6 +1261,12 @@ object VoiceBiometricsEngine {
                     spectralCentroidHz = centroidHz.toInt(),
                     similarityScorePercent = max(simPct, 84),
                     liveVoiceRmsLevel = normRms,
+                    waveformBars = waveformBars,
+                    snrDb = snrDb,
+                    antiSpoofLivenessScore = livenessScore,
+                    isSuspectedSpoof = suspectedSpoof,
+                    spoofReasonBn = spoofReason,
+                    detectedMood = mood,
                     isCurrentlySpeaking = true,
                     liveHudBadgeText = badge
                 )
@@ -874,7 +1276,8 @@ object VoiceBiometricsEngine {
                 val badge = "🎙️ নতুন কণ্ঠ: ${acousticGender.labelBn} (${acousticGender.labelEn} • ${pitchHz.toInt()}Hz • নাম বললে চিনে নেবে)"
                 _state.value = current.copy(
                     activeSpeakerName = "নতুন বক্তা (${acousticGender.labelBn})",
-                    isOwnerBossVerified = !hasBoss,
+                    activeSpeakerRole = SpeakerRole.GUEST_FRIEND,
+                    isOwnerBossVerified = !hasBoss && !suspectedSpoof,
                     isKnownEnrolledSpeaker = false,
                     isWaitingForNewSpeakerName = waitingForName,
                     hasOwnerBossProfile = hasBoss,
@@ -883,6 +1286,12 @@ object VoiceBiometricsEngine {
                     spectralCentroidHz = centroidHz.toInt(),
                     similarityScorePercent = simPct,
                     liveVoiceRmsLevel = normRms,
+                    waveformBars = waveformBars,
+                    snrDb = snrDb,
+                    antiSpoofLivenessScore = livenessScore,
+                    isSuspectedSpoof = suspectedSpoof,
+                    spoofReasonBn = spoofReason,
+                    detectedMood = mood,
                     isCurrentlySpeaking = true,
                     liveHudBadgeText = badge
                 )
@@ -1148,6 +1557,12 @@ object VoiceBiometricsEngine {
             finalEmbedding.toList()
         }
 
+        val assignedRole = when {
+            isOwnerBoss -> SpeakerRole.OWNER_BOSS
+            existingProfile != null -> existingProfile.role
+            detectedGender == DetectedSpeakerGender.CHILD -> SpeakerRole.RESTRICTED_CHILD
+            else -> SpeakerRole.GUEST_FRIEND
+        }
         val newProfile = EnrolledVoiceProfile(
             id = if (isOwnerBoss) "owner_boss_voice_lock" else "speaker_${speakerName.lowercase().replace(Regex("[^a-z0-9\\u0980-\\u09FF]"), "_")}",
             speakerName = speakerName,
@@ -1163,7 +1578,12 @@ object VoiceBiometricsEngine {
             signatureWords = extractedWords,
             sampleCount = (existingProfile?.sampleCount ?: 0) + 1,
             embedding = mergedEmbedding,
-            enrolledAtFormatted = nowStr
+            enrolledAtFormatted = existingProfile?.enrolledAtFormatted?.ifBlank { nowStr } ?: nowStr,
+            role = assignedRole,
+            allowGeneralChat = existingProfile?.allowGeneralChat ?: assignedRole.defaultGeneralChat,
+            allowAppControl = existingProfile?.allowAppControl ?: assignedRole.defaultAppControl,
+            allowSensitiveActions = existingProfile?.allowSensitiveActions ?: assignedRole.defaultSensitiveActions,
+            lastSeenFormatted = nowStr
         )
 
         val updatedList = _state.value.enrolledProfiles
@@ -1191,6 +1611,7 @@ object VoiceBiometricsEngine {
 
         _state.value = _state.value.copy(
             activeSpeakerName = newProfile.speakerName,
+            activeSpeakerRole = newProfile.role,
             isOwnerBossVerified = isOwnerBoss || _state.value.isOwnerBossVerified,
             isKnownEnrolledSpeaker = true,
             isWaitingForNewSpeakerName = false,
@@ -1205,10 +1626,23 @@ object VoiceBiometricsEngine {
             liveHudBadgeText = badge
         )
 
+        val logSummary = if (isOwnerBoss) {
+            "🔐 বসের মেইন ভয়েস প্রিন্ট ক্যালিব্রেট ও Google Drive-এ সিঙ্ক হয়েছে (${meanPitch.toInt()}Hz)"
+        } else {
+            "👤 নতুন বক্তা '$speakerName' (${assignedRole.labelBn}) এনরোল ও Drive-এ সেভ হয়েছে"
+        }
+        appendSecurityLog(
+            context = context,
+            eventType = if (isOwnerBoss) "CALIBRATED" else "GUEST_ENROLLED",
+            speakerName = speakerName,
+            summaryBn = logSummary,
+            isWarning = false
+        )
+
         return if (isOwnerBoss) {
             "জি বস! আপনার মেইন ভয়েস প্রিন্ট ও কথা বলার ধরন (${detectedGender.labelBn} • ${meanPitch.toInt()}Hz • $styleSummary) সফলভাবে চিনে লক করা হয়েছে এবং Google Drive-এ অটো-সেভ হয়েছে। এখন থেকে আপনার কণ্ঠ শুনলেই আমি সাথে সাথে চিনে নেব!"
         } else {
-            "জি বস! '$speakerName'-এর কণ্ঠস্বর ও কথা বলার ধরন (${detectedGender.labelBn} • ${meanPitch.toInt()}Hz • $styleSummary) মেমোরি ও Google Drive-এ সেভ করে নিয়েছি। এখন থেকে '$speakerName' কথা বললেই আমি তার গলা শুনে চিনে ফেলব!"
+            "জি বস! '$speakerName'-এর কণ্ঠস্বর ও কথা বলার ধরন (${detectedGender.labelBn} • ${assignedRole.labelBn} • ${meanPitch.toInt()}Hz) মেমোরি ও Google Drive-এ সেভ করে নিয়েছি। এখন থেকে '$speakerName' কথা বললেই আমি তার গলা শুনে চিনে ফেলব!"
         }
     }
 
@@ -1287,8 +1721,6 @@ object VoiceBiometricsEngine {
         targetOrAppSummary: String = ""
     ): String? {
         val st = _state.value
-        if (!st.hasOwnerBossProfile || !st.isVoiceSecurityLockEnabled) return null
-
         val upperAction = actionOrToolName.uppercase().trim()
         val lowerTarget = targetOrAppSummary.lowercase().trim()
 
@@ -1328,44 +1760,200 @@ object VoiceBiometricsEngine {
             lowerTarget.contains("ডিলিট") ||
             lowerTarget.contains("মুছে")
 
-        if (!isSensitiveCommand) return null
+        val isGeneralAppAction = upperAction in setOf("OPEN_APP", "CHROME_WEB_ACTION", "PLAY_MUSIC", "SET_ALARM", "SET_TIMER") && !isPrivateAppOpen
 
-        val recentlyVerifiedBoss = st.isOwnerBossVerified ||
-            (System.currentTimeMillis() - lastVerifiedBossAtMs < 6500L)
+        // 1. Anti-Spoof Liveness Guard against loudspeaker/recorded voice replay on sensitive actions
+        if (st.isVoiceSecurityLockEnabled && isSensitiveCommand && st.isSuspectedSpoof && (st.antiSpoofStrictMode || st.antiSpoofLivenessScore < 34)) {
+            val spoofMsg = "🛡️ অ্যান্টি-স্পুফ ব্লক: লাইভ মানুষের কণ্ঠের বদলে সম্ভাব্য রেকর্ডেড/স্পিকার অডিও শনাক্ত হয়েছে (Liveness ${st.antiSpoofLivenessScore}%)। সরাসরি মাইকে কথা বলুন।"
+            _state.value = st.copy(lastSecurityGateEventBn = spoofMsg)
+            return spoofMsg
+        }
+
+        if (!st.hasOwnerBossProfile || !st.isVoiceSecurityLockEnabled) return null
+
+        val activeProfile = st.enrolledProfiles.firstOrNull {
+            it.speakerName.equals(st.activeSpeakerName, ignoreCase = true)
+        }
+        val recentlyVerifiedBoss = (st.isOwnerBossVerified && !st.isSuspectedSpoof) ||
+            (!st.isSuspectedSpoof && System.currentTimeMillis() - lastVerifiedBossAtMs < 6500L)
 
         if (recentlyVerifiedBoss) return null
 
-        val currentSpeakerDesc = "${st.activeSpeakerName} (${st.detectedGender.labelBn} • ${st.detectedGender.labelEn})"
-        val blockMsg = "🔒 ভয়েস সিকিউরিটি গেট: দুঃখিত, বর্তমানে '$currentSpeakerDesc' কথা বলছেন—এটি বসের (Owner) ভেরিফায়েড কণ্ঠস্বর নয়। মেসেজ পাঠানো, কল করা, অ্যাপ ইনস্টল বা ব্যক্তিগত ফাইল/অ্যাপের মতো সংবেদনশীল আদেশ শুধুমাত্র বসের ভেরিফায়েড কণ্ঠই অনুমোদন করতে পারবে।"
+        // Check role-based granular permissions for known guests / family members
+        if (activeProfile != null) {
+            if (isGeneralAppAction && activeProfile.allowAppControl) return null
+            if (isSensitiveCommand && activeProfile.allowSensitiveActions) return null
+            if (isGeneralAppAction && !activeProfile.allowAppControl) {
+                val msg = "🔒 রোল পারমিশন: '${activeProfile.speakerName}' (${activeProfile.role.labelBn})-এর জন্য শুধুমাত্র সাধারণ চ্যাট অনুমোদিত; অ্যাপ চালানোর অনুমতি বসের প্যানেল থেকে বন্ধ রাখা আছে।"
+                _state.value = st.copy(lastSecurityGateEventBn = msg)
+                return msg
+            }
+        } else if (isGeneralAppAction) {
+            val msg = "🔒 গেস্ট মোড: অপরিচিত বক্তা শুধু সাধারণ চ্যাট করতে পারবেন। অ্যাপ চালু করতে হলে বসের কণ্ঠ বা অনুমোদন প্রয়োজন।"
+            _state.value = st.copy(lastSecurityGateEventBn = msg)
+            return msg
+        }
+
+        if (!isSensitiveCommand) return null
+
+        val currentSpeakerDesc = "${st.activeSpeakerName} (${st.detectedGender.labelBn} • ${st.activeSpeakerRole.labelBn})"
+        val blockMsg = "🔒 ভয়েস সিকিউরিটি গেট: দুঃখিত, বর্তমানে '$currentSpeakerDesc' কথা বলছেন—বসের অনুমোদন ছাড়া মেসেজ, কল, OTP বা ব্যক্তিগত অ্যাপ চালানো যাবে না; শুধু সাধারণ চ্যাট করতে পারবেন।"
         _state.value = st.copy(lastSecurityGateEventBn = blockMsg)
         return blockMsg
     }
 
     fun buildPromptContextForGeminiLive(): String = buildString {
         val st = _state.value
-        append("\n\nREAL-TIME BIOMETRIC SPEAKER IDENTIFICATION, SPEAKING STYLE & AUTO-GUEST LEARNING ENGINE (`VoiceBiometricsEngine`):\n")
+        append("\n\nREAL-TIME BIOMETRIC SPEAKER IDENTIFICATION, MOOD, ANTI-SPOOFING & ROLE ACCESS ENGINE (`VoiceBiometricsEngine`):\n")
         append("- LIVE CURRENT SPEAKER ON MIC: ${st.liveHudBadgeText}\n")
-        append("- SPEAKER IDENTITY: '${st.activeSpeakerName}' | DETECTED GENDER: ${st.detectedGender.labelBn} (${st.detectedGender.labelEn}) | PITCH: ${st.currentPitchHz}Hz | OWNER BOSS VERIFIED: ${if (st.isOwnerBossVerified) "YES (VERIFIED BOSS)" else "NO (OTHER SPEAKER / GUEST)"}\n")
-        append("- ENROLLED VOICE PROFILES & SPEAKING STYLES IN GOOGLE DRIVE (`/AI_OS_Memory/Voice_Profiles/`): ")
+        append(
+            "- SPEAKER IDENTITY: '${st.activeSpeakerName}' | ROLE: ${st.activeSpeakerRole.labelBn} (${st.activeSpeakerRole.labelEn}) | " +
+                "GENDER: ${st.detectedGender.labelBn} (${st.detectedGender.labelEn}) | PITCH: ${st.currentPitchHz}Hz | " +
+                "CONFIDENCE: ${st.similarityScorePercent}% | MOOD/TONE: ${st.detectedMood.emoji} ${st.detectedMood.labelBn} (${st.detectedMood.labelEn}) | " +
+                "ROOM SNR: ${st.snrDb}dB | ANTI-SPOOF LIVENESS: ${st.antiSpoofLivenessScore}% (${if (st.isSuspectedSpoof) "SUSPECTED PLAYBACK/SPOOF!" else "Verified Live Human"}) | " +
+                "OWNER BOSS VERIFIED: ${if (st.isOwnerBossVerified) "YES (FULL ACCESS)" else "NO (GUEST / LIMITED CHAT MODE)"}\n"
+        )
+        append("- ENROLLED VOICE PROFILES, ROLES & SPEAKING STYLES IN GOOGLE DRIVE (`/AI_OS_Memory/Voice_Profiles/`): ")
         if (st.enrolledProfiles.isEmpty()) {
             append("None enrolled yet.\n")
         } else {
             append(
                 st.enrolledProfiles.joinToString("; ") {
-                    "${it.speakerName} [${if (it.isOwnerBoss) "BOSS/OWNER" else "Known Speaker"}, ${it.gender.labelBn}/${it.gender.labelEn}, ${it.meanPitchHz.toInt()}Hz, Style: ${it.speakingStyleSummaryBn}]"
+                    "${it.speakerName} [${it.role.labelEn}, Chat=${it.allowGeneralChat}, Apps=${it.allowAppControl}, Sensitive=${it.allowSensitiveActions}, ${it.gender.labelBn}, ${it.meanPitchHz.toInt()}Hz, Style: ${it.speakingStyleSummaryBn}]"
                 } + "\n"
             )
         }
         append(
-            "- CRITICAL SPEAKER RECOGNITION & AUTO-INTRODUCTION RULES:\n" +
-                "  1) When Boss (`Verified Boss`) is speaking, address him respectfully as 'বস' (Boss) or 'স্যার' (Sir) and obey all commands immediately.\n" +
-                "  2) When an enrolled friend/family member is speaking (e.g., 'সিয়াম', 'রাহাত'), recognize their voice & speaking style and address them naturally by their name!\n" +
-                "  3) NEW / UNKNOWN SPEAKER PROTOCOL (অন্য কেউ কথা বললে আগে নাম জেনে কণ্ঠ ও কথা বলার ধরন চিনে নেওয়া): " +
-                "If `isWaitingForNewSpeakerName` is `${st.isWaitingForNewSpeakerName}` or you hear a new voice that is NOT Boss and NOT yet enrolled, politely ask them first in Bangla: 'আসসালামু আলাইকুম! আমি বুঝতে পারছি নতুন কেউ কথা বলছেন। আপনার নামটা কী বলবেন প্লিজ? তাহলে আমি আপনার কণ্ঠ ও কথা বলার ধরন চিনে রাখব।' " +
-                "As soon as they tell you their name (e.g. 'আমার নাম সিয়াম' / 'আমি রাহাত'), IMMEDIATELY call `voice_biometrics_control(operation='ENROLL_GUEST_VOICE', speaker_name='<name>', gender_hint='${st.detectedGender.id}')` so their voice print and speaking style are permanently learned and saved to Google Drive!\n" +
-                "  4) Whenever Boss says 'আমার ভয়েস লক করো' or reads the calibration sentences, call `voice_biometrics_control(operation='ENROLL_BOSS_VOICE', speaker_name='বস')`.\n" +
-                "  5) VOICE SECURITY GATE: If `OWNER BOSS VERIFIED` is `NO` and an unrecognized speaker asks to send messages, make calls, install apps, open private apps, or delete files, politely refuse in Bangla and explain that only Boss's verified voice can authorize sensitive actions.\n"
+            "- CRITICAL SPEAKER RECOGNITION, MOOD & SECURITY RULES:\n" +
+                "  1) BOSS FULL ACCESS: When Boss (`Verified Boss`) speaks, address him respectfully as 'বস' (Boss) or 'স্যার' (Sir) and execute all commands immediately.\n" +
+                "  2) MOOD ADAPTATION: Notice the speaker's live mood (${st.detectedMood.labelEn}) — if `Urgent`, respond ultra-fast and concisely; if `Stressed`, be calm, reassuring, and respectful; if `Happy`, match warm energy.\n" +
+                "  3) GUEST / FAMILY NORMAL CHAT: Known guests or unknown speakers can chat normally with you on any general question, knowledge, or friendly conversation. Recognize enrolled guests by name!\n" +
+                "  4) NEW SPEAKER AUTO-INTRODUCTION: If `isWaitingForNewSpeakerName` is `${st.isWaitingForNewSpeakerName}` or you hear a new voice that is NOT Boss and NOT yet enrolled, politely ask their name once in Bangla ('আসসালামু আলাইকুম! আমি বুঝতে পারছি নতুন কেউ কথা বলছেন—আপনার নামটা কী বলবেন?'). When they state their name, call `voice_biometrics_control(operation='ENROLL_GUEST_VOICE', speaker_name='<name>', gender_hint='${st.detectedGender.id}')`.\n" +
+                "  5) VOICE SECURITY & ANTI-SPOOF GATE: If `OWNER BOSS VERIFIED` is `NO` or `ANTI-SPOOF` warns of recorded playback, allow normal friendly chat for guests, but politely decline sensitive actions (messages, calls, OTP, private/bank apps, deleting files, installing apps) unless Boss authorizes them or grants that speaker role permission.\n"
         )
+    }
+
+    private fun extractMultiBandWaveform(
+        samples: FloatArray,
+        sampleRate: Int,
+        previousBars: List<Float>
+    ): List<Float> {
+        val bandsHz = floatArrayOf(
+            140f, 220f, 320f, 450f, 620f, 840f, 1100f,
+            1420f, 1800f, 2250f, 2750f, 3250f, 3750f, 4200f
+        )
+        val n = min(samples.size, 512)
+        if (n < 64) return previousBars
+        return List(WAVEFORM_BAR_COUNT) { idx ->
+            val e = goertzelBandEnergy(samples, n, bandsHz[idx], sampleRate)
+            val norm = (ln(1f + e * 0.45f) / 4.2f).coerceIn(0.07f, 1f)
+            val prev = previousBars.getOrElse(idx) { 0.08f }
+            (prev * 0.35f + norm * 0.65f).coerceIn(0.07f, 1f)
+        }
+    }
+
+    private fun estimateAcousticLivenessScore(
+        rawSamples: FloatArray,
+        sampleRate: Int,
+        clipFraction: Float
+    ): Int {
+        val n = min(rawSamples.size, 512)
+        if (n < 128) return 92
+        val subBass = goertzelBandEnergy(rawSamples, n, 125f, sampleRate) + goertzelBandEnergy(rawSamples, n, 165f, sampleRate)
+        val midBox = goertzelBandEnergy(rawSamples, n, 950f, sampleRate) + goertzelBandEnergy(rawSamples, n, 1450f, sampleRate)
+        val hiAir = goertzelBandEnergy(rawSamples, n, 3100f, sampleRate) + goertzelBandEnergy(rawSamples, n, 3850f, sampleRate)
+        val total = (subBass + midBox + hiAir).coerceAtLeast(1e-3f)
+
+        // Boxy speaker playback typically spikes midrange relative to natural chest resonance & air harmonics
+        val midRatio = midBox / total
+        val subRatio = subBass / total
+        var score = 95
+        if (midRatio > 0.80f && subRatio < 0.04f) score -= 28
+        if (hiAir < 0.01f * total) score -= 14
+        if (clipFraction > 0.015f) score -= ((clipFraction * 650f).toInt().coerceAtMost(36))
+
+        // Natural pitch micro-jitter across recent voiced frames
+        val jitterBonus = synchronized(rollingFrameLock) {
+            val recent = rollingPitchHistory.takeLast(8)
+            if (recent.size >= 5) {
+                val mean = recent.average().toFloat().coerceAtLeast(70f)
+                val diffs = (1 until recent.size).map { abs(recent[it] - recent[it - 1]) / mean }.average().toFloat()
+                when {
+                    diffs < 0.0025f -> -24 // Overly robotic/steady synthetic or looped tone
+                    diffs in 0.006f..0.14f -> 4
+                    else -> 0
+                }
+            } else 0
+        }
+        return (score + jitterBonus).coerceIn(12, 99)
+    }
+
+    private fun inferSpeakerMood(
+        recentPitches: List<Float>,
+        recentRms: List<Float>,
+        centroidHz: Float,
+        baselinePitchHz: Float
+    ): DetectedSpeakerMood {
+        if (recentPitches.size < 3 || recentRms.isEmpty()) return DetectedSpeakerMood.CALM
+        val avgPitch = recentPitches.average().toFloat()
+        val avgRms = recentRms.average().toFloat()
+        val pitchSpread = (recentPitches.maxOrNull() ?: avgPitch) - (recentPitches.minOrNull() ?: avgPitch)
+        val pitchDeltaRatio = (avgPitch - baselinePitchHz) / baselinePitchHz.coerceAtLeast(80f)
+
+        return when {
+            avgRms > 1350f && (pitchSpread > 52f || centroidHz > 2050f) -> DetectedSpeakerMood.STRESSED
+            pitchDeltaRatio > 0.14f && avgRms > 820f -> DetectedSpeakerMood.URGENT
+            pitchDeltaRatio > 0.05f && pitchSpread in 18f..52f -> DetectedSpeakerMood.HAPPY
+            avgRms < 340f && pitchDeltaRatio < -0.06f -> DetectedSpeakerMood.TIRED
+            else -> DetectedSpeakerMood.CALM
+        }
+    }
+
+    private fun appendSecurityLog(
+        context: Context,
+        eventType: String,
+        speakerName: String,
+        summaryBn: String,
+        isWarning: Boolean
+    ) {
+        val nowFormatted = SimpleDateFormat("hh:mm a • dd/MM", Locale.US).format(Date())
+        val entry = VoiceSecurityLogEntry(
+            id = "vlog_${System.currentTimeMillis()}",
+            timestampFormatted = nowFormatted,
+            eventType = eventType,
+            speakerName = speakerName,
+            summaryBn = summaryBn,
+            isWarning = isWarning
+        )
+        val updated = (listOf(entry) + _state.value.securityLogs).take(40)
+        _state.value = _state.value.copy(securityLogs = updated)
+        runCatching {
+            context.applicationContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_SECURITY_LOGS_JSON, serializeSecurityLogsJson(updated))
+                .apply()
+        }
+    }
+
+    private fun parseSecurityLogsJson(raw: String): List<VoiceSecurityLogEntry> {
+        return try {
+            val arr = JSONArray(raw)
+            val list = mutableListOf<VoiceSecurityLogEntry>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                VoiceSecurityLogEntry.fromJson(obj)?.let { list.add(it) }
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun serializeSecurityLogsJson(logs: List<VoiceSecurityLogEntry>): String {
+        val arr = JSONArray()
+        logs.forEach { arr.put(it.toJson()) }
+        return arr.toString()
     }
 
     private fun parseProfilesJson(raw: String): List<EnrolledVoiceProfile> {

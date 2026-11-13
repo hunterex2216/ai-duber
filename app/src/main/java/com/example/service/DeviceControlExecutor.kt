@@ -1300,12 +1300,16 @@ class DeviceControlExecutor(
             "হোয়াটসঅ্যাপ", "হোয়াটসঅ্যাপ", "টেলিগ্রাম", "মেসেঞ্জার", "ইনস্টাগ্রাম",
             "current_screen", "current_chat"
         )
-        var rec = if (AutonomousScreenAgent.isDeicticReference(trimmedRawRec) || isRawAppPlaceholder) {
-            ""
-        } else {
-            trimmedRawRec.replace(Regex("(কে|ের|রে)$"), "").trim()
+        val isRawSelf = AutonomousScreenAgent.isSelfRecipientReference(trimmedRawRec, rawMessage)
+        var rec = when {
+            isRawSelf -> "আমার আইডি"
+            AutonomousScreenAgent.isDeicticReference(trimmedRawRec) || isRawAppPlaceholder -> ""
+            else -> trimmedRawRec
+                .replace(Regex("(?i)\\s*(?:এর\\s*আইডিতে|এর\\s*আইডি|আইডিতে|এর\\s*নাম্বারে|এর\\s*নম্বরে)\\s*$"), "")
+                .replace(Regex("(কে|ের|রে|তে|য়ে|য়ে)$"), "")
+                .trim()
         }
-        if (AutonomousScreenAgent.isDeicticReference(rec)) {
+        if (!isRawSelf && AutonomousScreenAgent.isDeicticReference(rec)) {
             rec = ""
         }
         var msg = rawMessage.trim()
@@ -1316,8 +1320,22 @@ class DeviceControlExecutor(
             ""
         ).trim()
 
+        // 1. Check Self-ID pattern first ("আমার আইডিতে মেসেজ দেও হাই", "নিজের আইডিতে মেসেজ দাও...")
+        val selfPattern = Regex(
+            "(?i)^(?:আমার\\s*(?:নিজের\\s*|অন্য\\s*|সেকেন্ড\\s*)?(?:আইডিতে|আইডি|নাম্বারে|নাম্বার|নম্বরে|নম্বর|হোয়াটসঅ্যাপে|হোয়াটসঅ্যাপে)|নিজের\\s*(?:আইডিতে|আইডি)|আমাকে|নিজেকে|to\\s+my\\s+(?:own\\s+)?(?:id|number|whatsapp)|message\\s+myself)\\s*(?:(?:হোয়াটসঅ্যাপে|হোয়াটসঅ্যাপে|টেলিগ্রামে|মেসেঞ্জারে|মেসেজ|ম্যাসেজ|বার্তা|বলো|বল|লিখো|লেখো|লেখ|পাঠাও|দাও|দেও|করো|কর|দিয়ে|বলে|যে|:|-)\\s*)*(.*)$"
+        )
+        val selfMatch = selfPattern.find(strippedAppPrefix)
+        if (selfMatch != null) {
+            rec = "আমার আইডি"
+            val extractedBody = selfMatch.groupValues[1].trim()
+            if (extractedBody.isNotBlank()) {
+                msg = extractedBody
+            }
+            return ParsedChatCommand(cleanRecipient = rec, cleanMessageBody = msg)
+        }
+
         val bnPattern = Regex(
-            "(?i)^([\\p{L}\\p{M}\\d_\\s]{2,30}?)\\s*(?:কে|রে|ের)\\s+(?:(?:হোয়াটসঅ্যাপে|হোয়াটসঅ্যাপে|টেলিগ্রামে|মেসেঞ্জারে|ইনস্টাগ্রামে|মেসেজ|ম্যাসেজ|বার্তা|বলো|বল|লিখো|লেখো|লেখ|পাঠাও|দাও|করো|দিয়ে|বলে|যে)\\s*)+(.+)$"
+            "(?i)^([\\p{L}\\p{M}\\d_\\s]{2,30}?)\\s*(?:এর\\s*আইডিতে|আইডিতে|এর\\s*নাম্বারে|এর\\s*নম্বরে|কে|রে|ের|তে)\\s+(?:(?:হোয়াটসঅ্যাপে|হোয়াটসঅ্যাপে|টেলিগ্রামে|মেসেঞ্জারে|ইনস্টাগ্রামে|মেসেজ|ম্যাসেজ|বার্তা|বলো|বল|লিখো|লেখো|লেখ|পাঠাও|দাও|দেও|করো|কর|দিয়ে|বলে|যে)\\s*)+(.+)$"
         )
         val enPattern = Regex(
             "(?i)^(?:send\\s+a?\\s*message\\s+to|message|text|tell|whatsapp|telegram|messenger|instagram)\\s+([\\p{L}\\p{M}a-zA-Z0-9_\\s]{2,26}?)\\s+(?:that|saying|on\\s+whatsapp|on\\s+telegram|on\\s+messenger|:|-)+\\s*(.+)$"
@@ -1328,7 +1346,9 @@ class DeviceControlExecutor(
         when {
             bnMatch != null -> {
                 val candidateRec = bnMatch.groupValues[1].trim()
-                if ((rec.isBlank() || rec == "রাহিম ভাই") &&
+                if (AutonomousScreenAgent.isSelfRecipientReference(candidateRec, strippedAppPrefix)) {
+                    rec = "আমার আইডি"
+                } else if ((rec.isBlank() || rec == "রাহিম ভাই") &&
                     !AutonomousScreenAgent.isDeicticReference(candidateRec) &&
                     !AutonomousScreenAgent.isDeicticReference(candidateRec + "কে")
                 ) {
@@ -1338,7 +1358,9 @@ class DeviceControlExecutor(
             }
             enMatch != null -> {
                 val candidateRec = enMatch.groupValues[1].trim()
-                if ((rec.isBlank() || rec == "রাহিম ভাই") &&
+                if (AutonomousScreenAgent.isSelfRecipientReference(candidateRec, strippedAppPrefix)) {
+                    rec = "আমার আইডি"
+                } else if ((rec.isBlank() || rec == "রাহিম ভাই") &&
                     !AutonomousScreenAgent.isDeicticReference(candidateRec)
                 ) {
                     rec = candidateRec
@@ -1347,18 +1369,18 @@ class DeviceControlExecutor(
             }
             else -> {
                 msg = strippedAppPrefix.replace(
-                    Regex("(?i)^(?:(?:একে|ওকে|তাকে|এনাকে|উনাকে|এই\\s*আইডিতে|এই\\s*চ্যাটে|মেসেজ|ম্যাসেজ|বার্তা|পাঠাও|দাও|লিখো|লেখো|বলো|যে)\\s*)+"),
+                    Regex("(?i)^(?:(?:একে|ওকে|তাকে|এনাকে|উনাকে|এই\\s*আইডিতে|এই\\s*চ্যাটে|আমার\\s*আইডিতে|নিজের\\s*আইডিতে|আমাকে|নিজেকে|মেসেজ|ম্যাসেজ|বার্তা|পাঠাও|দাও|দেও|করো|কর|লিখো|লেখো|বলো|যে)\\s*)+"),
                     ""
                 ).trim()
-                if (rec.isNotBlank() && msg.startsWith(rec, ignoreCase = true)) {
+                if (rec.isNotBlank() && rec != "আমার আইডি" && msg.startsWith(rec, ignoreCase = true)) {
                     msg = msg.removePrefix(rec)
-                        .replace(Regex("^(?:\\s*(?:কে|রে|ের|বলো|মেসেজ|দাও|পাঠাও|লিখো|লেখো|যে))+\\s*"), "")
+                        .replace(Regex("^(?:\\s*(?:কে|রে|ের|তে|বলো|মেসেজ|দাও|দেও|পাঠাও|লিখো|লেখো|যে))+\\s*"), "")
                         .trim()
                 }
             }
         }
 
-        if (AutonomousScreenAgent.isDeicticReference(rec)) {
+        if (rec != "আমার আইডি" && AutonomousScreenAgent.isDeicticReference(rec)) {
             rec = ""
         }
 

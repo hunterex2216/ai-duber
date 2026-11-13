@@ -938,6 +938,7 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
             "voice_biometrics_control" -> {
                 val op = args.optString("operation", "WHO_IS_SPEAKING").trim().uppercase()
                 val speakerName = args.optString("speaker_name").trim()
+                val speakerRoleStr = args.optString("speaker_role").trim()
                 val genderHint = args.optString("gender_hint").trim()
                 val lockEnabledStr = args.optString("lock_enabled").trim().uppercase()
                 val res = when (op) {
@@ -980,12 +981,28 @@ class OmniAgentViewModel(application: Application) : AndroidViewModel(applicatio
                         val on = lockEnabledStr !in setOf("OFF", "FALSE", "0", "DISABLE")
                         com.example.service.VoiceBiometricsEngine.setVoiceSecurityLockEnabled(ctx, on)
                     }
+                    "SET_ANTI_SPOOF_STRICT" -> {
+                        val strict = lockEnabledStr !in setOf("OFF", "FALSE", "0", "DISABLE", "STANDARD")
+                        com.example.service.VoiceBiometricsEngine.setAntiSpoofStrictMode(ctx, strict)
+                    }
+                    "CALIBRATE_NOISE" -> {
+                        com.example.service.VoiceBiometricsEngine.startTwoSecondNoiseCalibration(ctx)
+                        "🎛️ ২-সেকেন্ড অ্যাডাপটিভ রুম নয়েজ ক্যালিব্রেশন শুরু হয়েছে—একটু শান্ত থাকুন।"
+                    }
+                    "SET_SPEAKER_ROLE" -> {
+                        val role = com.example.service.SpeakerRole.fromString(speakerRoleStr)
+                        com.example.service.VoiceBiometricsEngine.updateSpeakerRoleAndPermissions(
+                            context = ctx,
+                            profileIdOrName = speakerName,
+                            newRole = role
+                        )
+                    }
                     "DELETE_VOICE_PROFILE" -> {
                         com.example.service.VoiceBiometricsEngine.deleteVoiceProfile(ctx, speakerName)
                     }
                     else -> {
                         val st = com.example.service.VoiceBiometricsEngine.state.value
-                        "বর্তমান বক্তা: ${st.activeSpeakerName} • লিঙ্গ/কণ্ঠ: ${st.detectedGender.labelBn} (${st.detectedGender.labelEn}) • পিচ: ${st.currentPitchHz}Hz • বসের ভয়েস ভেরিফায়েড: ${if (st.isOwnerBossVerified) "হ্যাঁ (Verified)" else "না (Guest)"}"
+                        "বর্তমান বক্তা: ${st.activeSpeakerName} (${st.activeSpeakerRole.labelBn}) • লিঙ্গ: ${st.detectedGender.labelBn} • পিচ: ${st.currentPitchHz}Hz • কনফিডেন্স: ${st.similarityScorePercent}% • মুড: ${st.detectedMood.emoji} ${st.detectedMood.labelBn} • Liveness: ${st.antiSpoofLivenessScore}% • SNR: ${st.snrDb}dB • বসের ভয়েস ভেরিফায়েড: ${if (st.isOwnerBossVerified) "হ্যাঁ (Verified)" else "না (Guest)"}"
                     }
                 }
                 _liveArcherReply.value = res
