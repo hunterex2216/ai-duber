@@ -455,9 +455,6 @@ fun AgentCommandScreen(
                 // 2C. 5TB Google Drive ('AI_OS_Memory') Quick Connect, Live Cloud Brain & Custom API / Script Slot
                 val driveSyncState by com.example.service.GoogleDriveMemorySyncService.state.collectAsState()
                 var showDriveApiSetupDialog by remember { mutableStateOf(false) }
-                var universalApiInput by remember(driveSyncState.universalApiInput) {
-                    mutableStateOf(driveSyncState.universalApiInput)
-                }
 
                 Row(
                     modifier = Modifier
@@ -487,15 +484,17 @@ fun AgentCommandScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (driveSyncState.isConnected) {
+                            text = if (driveSyncState.isConnected && !driveSyncState.needsReconnect) {
                                 "অটো-সিঙ্ক ও লাইভ ব্রেইন সচল: মেমোরি ${driveSyncState.backedUpMemoriesCount} • চ্যাট ${driveSyncState.backedUpConversationsCount} • কোড ${driveSyncState.backedUpScreenshotsAndFilesCount} • ZIP ${driveSyncState.backedUpZipPackagesCount}" +
-                                    (if (driveSyncState.confirmationEmailSent) " • 📧 জিমেইল কনফার্মড" else "")
+                                    (if (driveSyncState.pendingUploadsCount > 0) " • ⏳ অপেক্ষমাণ ${driveSyncState.pendingUploadsCount}" else "")
+                            } else if (driveSyncState.lastErrorBn.isNotBlank()) {
+                                "❌ " + driveSyncState.lastErrorBn
                             } else {
                                 driveSyncState.lastSyncStatusBn
                             },
                             color = Color(0xFFB5D8CC),
                             fontSize = 9.2.sp,
-                            maxLines = 1,
+                            maxLines = 3,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -504,7 +503,7 @@ fun AgentCommandScreen(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (driveSyncState.isConnected) {
+                        if (driveSyncState.isConnected && !driveSyncState.needsReconnect) {
                             Button(
                                 onClick = {
                                     com.example.service.GoogleDriveMemorySyncService.triggerFullSyncFromUi(
@@ -583,7 +582,7 @@ fun AgentCommandScreen(
                                 .testTag("main_drive_api_setup_button")
                         ) {
                             Text(
-                                text = "🔑 API",
+                                text = if (driveSyncState.lastErrorBn.isNotBlank()) "⚠️ ℹ️" else "ℹ️",
                                 color = MatrixGreen,
                                 fontSize = 9.5.sp,
                                 fontWeight = FontWeight.ExtraBold
@@ -593,14 +592,15 @@ fun AgentCommandScreen(
                 }
 
                 if (showDriveApiSetupDialog) {
+                    val diagnosticText = com.example.service.GoogleDriveMemorySyncService.buildSetupDiagnosticBn(context)
                     AlertDialog(
                         onDismissRequest = { showDriveApiSetupDialog = false },
                         containerColor = Color(0xFF0B192C),
                         title = {
                             Text(
-                                text = "☁️ 5TB Google Drive API ও লাইভ ক্লাউড ব্রেইন সেটআপ",
+                                text = "☁️ Google Drive ব্রেইন — অবস্থা ও সমস্যা সমাধান",
                                 color = MatrixGreen,
-                                fontSize = 14.5.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.ExtraBold
                             )
                         },
@@ -610,102 +610,30 @@ fun AgentCommandScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
-                                    text = "স্যার, এই AI-এর সমস্ত মেমোরি, আগের কথোপকথন ও ভয়েস প্রোফাইল `/AI_OS_Memory` ফোল্ডারে স্বয়ংক্রিয়ভাবে সেভ ও রিস্টোর হয়। আপনি সরাসরি Google Sign-In করতে পারেন অথবা নিচের ১টি বক্সে মেইন API / Token / Apps Script URL / Drive ফোল্ডার লিংক বসান — সিস্টেম নিজেই চিনে কানেক্ট করবে। কানেক্ট হলে আপনার জিমেইলে কনফার্মেশন মেইল যাবে:",
+                                    text = "এই AI-এর সব মেমোরি, কথোপকথন, কোড ও ভয়েস প্রোফাইল আপনার নিজের Google Drive-এর `/AI_OS_Memory`-এ নিজে নিজে সেভ ও রিস্টোর হয় — আলাদা কোনো সেভ বাটন লাগে না। কোনো ডেমো/ভুয়া অ্যাকাউন্ট নেই; শুধু আসল Google লগইন কাজ করে।",
                                     color = Color(0xFFD7F7EA),
                                     fontSize = 11.sp,
                                     lineHeight = 15.sp
                                 )
-
-                                OutlinedTextField(
-                                    value = universalApiInput,
-                                    onValueChange = { universalApiInput = it },
-                                    label = { Text("🔑 মেইন API / লিংক / টোকেন (১টি বক্স — প্রি-লোডেড)", color = MatrixGreen, fontSize = 10.5.sp) },
-                                    placeholder = { Text("AIzaSy... / ya29... / script.google.com/.../exec", fontSize = 10.sp) },
-                                    minLines = 2,
-                                    maxLines = 4,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("drive_universal_api_input")
+                                Text(
+                                    text = "অবস্থা: ${driveSyncState.lastSyncStatusBn}",
+                                    color = Color(0xFFB5D8CC),
+                                    fontSize = 10.5.sp,
+                                    lineHeight = 14.sp
                                 )
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            val builtInKey = com.example.service.GoogleDriveMemorySyncService.BUILT_IN_DRIVE_API_KEY
-                                            universalApiInput = builtInKey
-                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                            cm.setPrimaryClip(android.content.ClipData.newPlainText("Google_Drive_API_Key", builtInKey))
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "✓ মেইন Drive API Key বক্সে বসানো ও কপি করা হয়েছে!",
-                                                android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                        },
-                                        border = BorderStroke(1.dp, CyberCyan),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("🔑 মেইন API কপি ও বসান", color = CyberCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    OutlinedButton(
-                                        onClick = {
-                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                            val pasted = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
-                                            if (pasted.isNotBlank()) universalApiInput = pasted
-                                        },
-                                        border = BorderStroke(1.dp, MatrixGreen),
-                                        modifier = Modifier.weight(1f).testTag("drive_universal_paste_button")
-                                    ) {
-                                        Text("📋 পেস্ট করুন", color = MatrixGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            val scriptCode = com.example.service.GoogleDriveMemorySyncService.getReadyToPasteAppsScriptCode()
-                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                            cm.setPrimaryClip(android.content.ClipData.newPlainText("AI_OS_Drive_Bridge", scriptCode))
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "✓ Apps Script কোড কপি হয়েছে! script.google.com-এ পেস্ট করে Web App URL এখানে দিন।",
-                                                android.widget.Toast.LENGTH_LONG
-                                            ).show()
-                                        },
-                                        border = BorderStroke(1.dp, Color(0xFFFBBF24)),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("📋 Apps Script কোড কপি", color = Color(0xFFFBBF24), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    OutlinedButton(
-                                        onClick = {
-                                            com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(
-                                                context = context,
-                                                onStatusSpoken = onSpeakText
-                                            )
-                                            showDriveApiSetupDialog = false
-                                        },
-                                        border = BorderStroke(1.dp, CyberCyan),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("☁️ Gmail সাইন-ইন", color = CyberCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
+                                Text(
+                                    text = diagnosticText,
+                                    color = Color(0xFFFBBF24),
+                                    fontSize = 10.5.sp,
+                                    lineHeight = 14.sp
+                                )
                             }
                         },
                         confirmButton = {
                             Button(
                                 onClick = {
-                                    com.example.service.GoogleDriveMemorySyncService.saveUniversalApiInput(
+                                    com.example.service.GoogleDriveMemorySyncService.startDirectDriveAuthorization(
                                         context = context,
-                                        rawInput = universalApiInput,
                                         onStatusSpoken = onSpeakText
                                     )
                                     showDriveApiSetupDialog = false
@@ -716,12 +644,21 @@ fun AgentCommandScreen(
                                 ),
                                 modifier = Modifier.testTag("save_drive_api_config_button")
                             ) {
-                                Text("✅ কানেক্ট করুন", fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
+                                Text("☁️ আবার Connect", fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
                             }
                         },
                         dismissButton = {
-                            TextButton(onClick = { showDriveApiSetupDialog = false }) {
-                                Text("বন্ধ করুন", color = Color(0xFF94A3B8))
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(onClick = {
+                                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Archer_SHA1", driveSyncState.appSha1))
+                                    android.widget.Toast.makeText(context, "✓ SHA-1 কপি হয়েছে", android.widget.Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Text("📋 SHA-1 কপি", color = CyberCyan)
+                                }
+                                TextButton(onClick = { showDriveApiSetupDialog = false }) {
+                                    Text("বন্ধ করুন", color = Color(0xFF94A3B8))
+                                }
                             }
                         }
                     )
